@@ -1,17 +1,31 @@
-import { Stack } from "expo-router";
+import { Tabs } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { useTheme } from "../../_ThemeContext";
 
 export default function TabsLayout() {
+  const { theme } = useTheme();
+
   return (
-    <Stack
-      initialRouteName="index"
+    <Tabs
       screenOptions={{
-        headerShown: false, // 👈 hides headers globally
+        headerShown: false,
+        tabBarStyle: {
+          backgroundColor: "#000",
+          borderTopColor: "#222",
+        },
+        tabBarActiveTintColor: theme.accent,
+        tabBarInactiveTintColor: theme.secondaryText,
       }}
     >
-      <Stack.Screen name="index" />
-      <Stack.Screen name="call" />
-      <Stack.Screen name="addContact" />
-      <Stack.Screen name="settings" />
-    </Stack>
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: "Contacts",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="people" size={size} color={color} />
+          ),
+        }}
+      />
+    </Tabs>
   );
 }

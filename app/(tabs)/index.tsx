@@ -9,11 +9,12 @@ import {
   Modal,
   Pressable,
   Alert,
+  Image,
 } from 'react-native';
 import * as Contacts from 'expo-contacts';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
-import { useTheme } from '../ThemeContext';
+import { useTheme } from '../../_ThemeContext';
 
 const ContactsScreen = () => {
   const [contacts, setContacts] = useState([]);
@@ -42,7 +43,11 @@ const ContactsScreen = () => {
     const { status } = await Contacts.requestPermissionsAsync();
     if (status === 'granted') {
       const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.PhoneNumbers],
+        fields: [
+          Contacts.Fields.PhoneNumbers,
+          Contacts.Fields.Image,
+          Contacts.Fields.ImageAvailable,
+        ],
       });
       if (data.length > 0) {
         const sorted = data.sort((a, b) =>
@@ -75,10 +80,42 @@ const ContactsScreen = () => {
     setDeleteModalVisible(true);
   };
 
-  const handleDelete = (contact: any) => {
-    const newContacts = contacts.filter((c) => c.id !== contact.id);
-    setContacts(newContacts);
-    setFilteredContacts(newContacts);
+  const handleDelete = async (contact: any) => {
+    try {
+      // Delete from device contacts
+      await Contacts.removeContactAsync(contact.id);
+      
+      // Update local state
+      const newContacts = contacts.filter((c) => c.id !== contact.id);
+      setContacts(newContacts);
+      setFilteredContacts(newContacts);
+      
+      Alert.alert('Success', 'Contact deleted successfully');
+    } catch (error) {
+      console.error('Error deleting contact:', error);
+      Alert.alert('Error', 'Failed to delete contact. Please try again.');
+    }
+  };
+
+  const renderAvatar = (contact: any) => {
+    const hasImage = contact.imageAvailable && contact.image?.uri;
+    
+    if (hasImage) {
+      return (
+        <Image
+          source={{ uri: contact.image.uri }}
+          style={styles.avatarImage}
+        />
+      );
+    } else {
+      return (
+        <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
+          <Text style={styles.avatarText}>
+            {contact.name ? contact.name.charAt(0).toUpperCase() : '?'}
+          </Text>
+        </View>
+      );
+    }
   };
 
   const renderItem = ({ item }: any) => {
@@ -89,16 +126,17 @@ const ContactsScreen = () => {
         onPress={() =>
           router.push({
             pathname: './call',
-            params: { name: item.name, phone: phone || '' },
+            params: {
+              name: item.name,
+              phone: phone || '',
+              contactId: item.id,
+              imageUri: item.imageAvailable && item.image?.uri ? item.image.uri : '',
+            },
           })
         }
         onLongPress={() => confirmDeleteContact(item)}
       >
-        <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
-          <Text style={styles.avatarText}>
-            {item.name ? item.name.charAt(0).toUpperCase() : '?'}
-          </Text>
-        </View>
+        {renderAvatar(item)}
         <View style={styles.info}>
           <Text style={[styles.name, { color: theme.text }]}>
             {item.name || 'Unnamed Contact'}
@@ -212,9 +250,9 @@ const ContactsScreen = () => {
               </Pressable>
               <Pressable
                 style={[styles.modalBtn, { backgroundColor: 'red' }]}
-                onPress={() => {
-                  handleDelete(contactToDelete);
+                onPress={async () => {
                   setDeleteModalVisible(false);
+                  await handleDelete(contactToDelete);
                 }}
               >
                 <Text style={{ color: '#fff', textAlign: 'center' }}>Delete</Text>
@@ -305,6 +343,11 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   avatarText: { color: '#fff', fontWeight: '600', fontSize: 18 },
   info: { marginLeft: 12, flex: 1 },

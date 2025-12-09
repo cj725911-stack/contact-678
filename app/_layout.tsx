@@ -1,19 +1,26 @@
-import { Stack } from 'expo-router';
-import { ThemeProvider } from './ThemeContext';
+import { Stack } from "expo-router";
+import { ThemeProvider } from "../_ThemeContext";
 
 export default function RootLayout() {
   return (
     <ThemeProvider>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-        }}
-      >
-        <Stack.Screen name="index" />
-        <Stack.Screen name="addContact" />
-        <Stack.Screen name="call" />
-        <Stack.Screen name="settings" />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen 
+          name="addContact" 
+          options={{ 
+            presentation: "modal",
+            headerShown: true,
+            title: "Add Contact"
+          }} 
+        />
+        <Stack.Screen name="call" options={{ headerShown: false }} />
+        <Stack.Screen name="callhistory" options={{ headerShown: false }} />
+        <Stack.Screen name="setreminder" options={{ headerShown: false}} />
+        <Stack.Screen name="notes" options={{ headerShown: false }} />
+        <Stack.Screen name="editcontact" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
       </Stack>
     </ThemeProvider>
   );
-}
+}                
