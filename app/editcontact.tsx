@@ -17,8 +17,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../_ThemeContext";
 import * as Contacts from "expo-contacts";
 
-
-
 const { width } = Dimensions.get("window");
 
 export default function EditContactScreen() {
