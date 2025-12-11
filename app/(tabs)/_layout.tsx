@@ -3,15 +3,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../_ThemeContext";
 
 export default function TabsLayout() {
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: "#000",
-          borderTopColor: "#222",
+          backgroundColor: theme.inputBg,
+          borderTopColor: theme.itemBorder,
+          borderTopWidth: 1,
         },
         tabBarActiveTintColor: theme.accent,
         tabBarInactiveTintColor: theme.secondaryText,

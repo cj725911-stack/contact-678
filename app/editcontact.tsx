@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,12 +10,14 @@ import {
   Platform,
   Alert,
   Dimensions,
+  Image,
 } from "react-native";
 import { Stack, useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../_ThemeContext";
 import * as Contacts from "expo-contacts";
+import * as ImagePicker from "expo-image-picker";
 
 const { width } = Dimensions.get("window");
 
@@ -23,6 +25,7 @@ export default function EditContactScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const params = useLocalSearchParams();
+  const contactId = params.id as string;
 
   const [contactData, setContactData] = useState({
     firstName: "",
@@ -33,7 +36,94 @@ export default function EditContactScreen() {
     address: "",
     birthday: "",
     notes: "",
+    imageUri: "",
   });
+
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadContact();
+  }, []);
+
+  const loadContact = async () => {
+    if (!contactId) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Cannot load contact without permission");
+        router.back();
+        return;
+      }
+
+      const contact = await Contacts.getContactByIdAsync(contactId);
+      if (contact) {
+        setContactData({
+          firstName: contact.firstName || "",
+          lastName: contact.lastName || "",
+          company: contact.company || "",
+          phoneNumbers:
+            contact.phoneNumbers && contact.phoneNumbers.length > 0
+              ? contact.phoneNumbers.map((p, index) => ({
+                  id: String(index),
+                  label: p.label || "mobile",
+                  number: p.number || "",
+                }))
+              : [{ id: "1", label: "mobile", number: "" }],
+          emails:
+            contact.emails && contact.emails.length > 0
+              ? contact.emails.map((e, index) => ({
+                  id: String(index),
+                  label: e.label || "home",
+                  email: e.email || "",
+                }))
+              : [{ id: "1", label: "home", email: "" }],
+          address:
+            contact.addresses && contact.addresses.length > 0
+              ? contact.addresses[0].street || ""
+              : "",
+          birthday: contact.birthday
+            ? `${contact.birthday.month}/${contact.birthday.day}/${contact.birthday.year}`
+            : "",
+          notes: contact.note || "",
+          imageUri: contact.image?.uri || "",
+        });
+      }
+    } catch (error) {
+      console.error("Error loading contact:", error);
+      Alert.alert("Error", "Failed to load contact");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pickImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (!permissionResult.granted) {
+        Alert.alert("Permission Required", "Please allow access to your photo library");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setContactData({ ...contactData, imageUri: result.assets[0].uri });
+      }
+    } catch (error) {
+      console.error("Error picking image:", error);
+      Alert.alert("Error", "Failed to pick image");
+    }
+  };
 
   const saveContact = async () => {
     if (!contactData.firstName && !contactData.lastName) {
@@ -70,8 +160,24 @@ export default function EditContactScreen() {
         [Contacts.Fields.Note]: contactData.notes,
       };
 
-      await Contacts.addContactAsync(contact);
-      Alert.alert("Success", "Contact saved successfully");
+      // Add image if available
+      if (contactData.imageUri) {
+        contact[Contacts.Fields.Image] = { uri: contactData.imageUri };
+      }
+
+      if (contactId) {
+        // Update existing contact
+        await Contacts.updateContactAsync({
+          id: contactId,
+          ...contact,
+        });
+        Alert.alert("Success", "Contact updated successfully");
+      } else {
+        // Add new contact
+        await Contacts.addContactAsync(contact);
+        Alert.alert("Success", "Contact saved successfully");
+      }
+      
       router.back();
     } catch (error) {
       Alert.alert("Error", "Failed to save contact");
@@ -138,11 +244,21 @@ export default function EditContactScreen() {
     });
   };
 
+  if (loading) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
+        <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
+          <Text style={{ color: theme.text }}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
       <Stack.Screen
         options={{
-          title: "Add Contact",
+          title: contactId ? "Edit Contact" : "Add Contact",
           headerTitleStyle: { color: theme.text },
           headerStyle: { backgroundColor: theme.background },
           headerTintColor: theme.accent,
@@ -166,16 +282,28 @@ export default function EditContactScreen() {
         >
           {/* Avatar Section */}
           <View style={styles.avatarSection}>
-            <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
-              <Text style={styles.avatarText}>
-                {contactData.firstName
-                  ? contactData.firstName.charAt(0).toUpperCase()
-                  : "?"}
-              </Text>
-            </View>
-            <TouchableOpacity style={styles.changePhotoButton}>
+            <TouchableOpacity onPress={pickImage} style={styles.avatarTouchable}>
+              {contactData.imageUri ? (
+                <Image
+                  source={{ uri: contactData.imageUri }}
+                  style={styles.avatarImage}
+                />
+              ) : (
+                <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
+                  <Text style={styles.avatarText}>
+                    {contactData.firstName
+                      ? contactData.firstName.charAt(0).toUpperCase()
+                      : "?"}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.cameraIconContainer}>
+                <Ionicons name="camera" size={20} color="#fff" />
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.changePhotoButton} onPress={pickImage}>
               <Text style={[styles.changePhotoText, { color: theme.accent }]}>
-                Change Photo
+                {contactData.imageUri ? "Change Photo" : "Add Photo"}
               </Text>
             </TouchableOpacity>
           </View>
@@ -380,8 +508,18 @@ export default function EditContactScreen() {
             </View>
           </View>
 
+          {/* Save Button (Bottom) */}
+          <TouchableOpacity
+            style={[styles.saveButton, { backgroundColor: theme.accent }]}
+            onPress={saveContact}
+          >
+            <Text style={styles.saveButtonText}>
+              {contactId ? "Update Contact" : "Save Contact"}
+            </Text>
+          </TouchableOpacity>
+
           {/* Bottom Spacing */}
-          <View style={{ height: 100 }} />
+          <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -395,9 +533,18 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingTop: 10,
   },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   avatarSection: {
     alignItems: "center",
     paddingVertical: 20,
+  },
+  avatarTouchable: {
+    position: "relative",
+    marginBottom: 10,
   },
   avatar: {
     width: 100,
@@ -405,12 +552,29 @@ const styles = StyleSheet.create({
     borderRadius: 50,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 10,
+  },
+  avatarImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
   },
   avatarText: {
     color: "#fff",
     fontSize: 40,
     fontWeight: "bold",
+  },
+  cameraIconContainer: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    backgroundColor: "#007AFF",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
   },
   changePhotoButton: {
     paddingVertical: 8,

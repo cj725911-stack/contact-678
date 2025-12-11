@@ -10,7 +10,7 @@ export default function RootLayout() {
           name="addContact" 
           options={{ 
             presentation: "modal",
-            headerShown: true,
+            headerShown: false,
             title: "Add Contact"
           }} 
         />

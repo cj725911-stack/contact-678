@@ -5,28 +5,38 @@ import {
   StyleSheet,
   TouchableOpacity,
   Linking,
-  Alert,
   ScrollView,
   Share,
   Clipboard,
   Dimensions,
   PermissionsAndroid,
   Image,
+  Modal,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { useTheme } from "../_ThemeContext";
 import { SafeAreaView } from "react-native-safe-area-context";
 import RNImmediatePhoneCall from 'react-native-immediate-phone-call';
+import * as Contacts from 'expo-contacts';
 
 const { width } = Dimensions.get("window");
 
 export default function CallScreen() {
   const router = useRouter();
-  const { contact, name, phone, imageUri } = useLocalSearchParams();
+  const { contact, name, phone, imageUri, contactId } = useLocalSearchParams();
   const { theme, isDark } = useTheme();
   
   const [isFavorite, setIsFavorite] = useState(false);
+  const [showCopyAlert, setShowCopyAlert] = useState(false);
+  const [showVideoAlert, setShowVideoAlert] = useState(false);
+  const [showErrorAlert, setShowErrorAlert] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [showCallAlert, setShowCallAlert] = useState(false);
+  const [showEmailAlert, setShowEmailAlert] = useState(false);
+  const [showFavoriteAlert, setShowFavoriteAlert] = useState(false);
+  const [favoriteAction, setFavoriteAction] = useState("");
+  const [showDeleteAlert, setShowDeleteAlert] = useState(false);
 
   useEffect(() => {
     const requestPhonePermission = async () => {
@@ -57,7 +67,8 @@ export default function CallScreen() {
   // Make immediate phone call (no dialer screen)
   const makeImmediateCall = () => {
     if (!phone) {
-      Alert.alert("Error", "No phone number found.");
+      setErrorMessage("No phone number found.");
+      setShowErrorAlert(true);
       return;
     }
 
@@ -67,39 +78,43 @@ export default function CallScreen() {
       console.log(`Calling ${cleanNumber}...`);
     } catch (error) {
       console.error('Call error:', error);
-      Alert.alert("Error", "Failed to make call. Make sure CALL_PHONE permission is granted.");
+      setShowCallAlert(true);
     }
   };
 
   // Send SMS
   const sendSMS = () => {
-    if (!phone) return Alert.alert("No number", "This contact has no phone number.");
+    if (!phone) {
+      setErrorMessage("This contact has no phone number.");
+      setShowErrorAlert(true);
+      return;
+    }
     Linking.openURL(`sms:${phone}`);
   };
 
-  // Video call placeholder
+  // Video call with themed alert
   const startVideo = () => {
-    Alert.alert(
-      "Video Call", 
-      "Would you like to use:",
-      [
-        { text: "WhatsApp", onPress: () => openWhatsAppCall() },
-        { text: "Google Duo", onPress: () => openGoogleDuo() },
-        { text: "Cancel", style: "cancel" }
-      ]
-    );
+    setShowVideoAlert(true);
   };
 
   // WhatsApp regular chat
   const openWhatsApp = () => {
-    if (!phone) return Alert.alert("No number", "This contact has no phone number.");
+    if (!phone) {
+      setErrorMessage("This contact has no phone number.");
+      setShowErrorAlert(true);
+      return;
+    }
     const cleanNumber = (phone as string).replace(/[^0-9]/g, "");
     Linking.openURL(`https://wa.me/${cleanNumber}`);
   };
 
   // WhatsApp Voice Call
   const openWhatsAppCall = () => {
-    if (!phone) return Alert.alert("No number", "This contact has no phone number.");
+    if (!phone) {
+      setErrorMessage("This contact has no phone number.");
+      setShowErrorAlert(true);
+      return;
+    }
     const cleanNumber = (phone as string).replace(/[^0-9]/g, "");
     Linking.openURL(`https://wa.me/${cleanNumber}?call=voice`);
   };
@@ -113,14 +128,15 @@ export default function CallScreen() {
 
   // Email
   const sendEmail = () => {
-    Alert.alert("Email", "No email address saved for this contact.");
+    setShowEmailAlert(true);
   };
 
-  // Copy number
+  // Copy number with themed alert
   const copyNumber = () => {
     if (!phone) return;
     Clipboard.setString(phone as string);
-    Alert.alert("Copied", "Phone number copied to clipboard");
+    setShowCopyAlert(true);
+    setTimeout(() => setShowCopyAlert(false), 2000);
   };
 
   // Share contact
@@ -137,38 +153,76 @@ export default function CallScreen() {
 
   // Toggle favorite
   const toggleFavorite = () => {
-    setIsFavorite(!isFavorite);
-    Alert.alert(
-      isFavorite ? "Removed from Favorites" : "Added to Favorites",
-      `${name} ${isFavorite ? "removed from" : "added to"} favorites`
-    );
+    const newFavoriteState = !isFavorite;
+    setIsFavorite(newFavoriteState);
+    setFavoriteAction(newFavoriteState ? "added to" : "removed from");
+    setShowFavoriteAlert(true);
   };
 
   // Edit contact
   const editContact = () => {
     router.push({
       pathname: '/editcontact',
-      params: { name, phone, imageUri: imageUri || '' }
+      params: { name, phone, imageUri: imageUri || '', contactId: contactId || '' }
     });
   };
 
   // Delete contact
   const deleteContact = () => {
-    Alert.alert(
-      "Delete Contact",
-      `Are you sure you want to delete ${name}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            Alert.alert("Deleted", "Contact deleted successfully");
+    setShowDeleteAlert(true);
+  };
+
+  const confirmDelete = async () => {
+    setShowDeleteAlert(false);
+    
+    try {
+      // Request contacts permission
+      const { status } = await Contacts.requestPermissionsAsync();
+      
+      if (status !== 'granted') {
+        setErrorMessage("Permission denied. Cannot delete contact.");
+        setShowErrorAlert(true);
+        return;
+      }
+
+      // If we have a contactId, use it to delete the contact
+      if (contactId) {
+        await Contacts.removeContactAsync(contactId as string);
+        setErrorMessage("Contact deleted successfully");
+        setShowErrorAlert(true);
+        setTimeout(() => {
+          router.back();
+        }, 1500);
+      } else {
+        // If no contactId, try to find and delete by phone number
+        const { data } = await Contacts.getContactsAsync({
+          fields: [Contacts.Fields.PhoneNumbers],
+        });
+
+        const cleanSearchPhone = (phone as string).replace(/[^0-9]/g, "");
+        const contactToDelete = data.find((c) => 
+          c.phoneNumbers?.some((p) => 
+            p.number?.replace(/[^0-9]/g, "") === cleanSearchPhone
+          )
+        );
+
+        if (contactToDelete && contactToDelete.id) {
+          await Contacts.removeContactAsync(contactToDelete.id);
+          setErrorMessage("Contact deleted successfully");
+          setShowErrorAlert(true);
+          setTimeout(() => {
             router.back();
-          },
-        },
-      ]
-    );
+          }, 1500);
+        } else {
+          setErrorMessage("Contact not found in your phone's contacts.");
+          setShowErrorAlert(true);
+        }
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      setErrorMessage("Failed to delete contact. Please try again.");
+      setShowErrorAlert(true);
+    }
   };
 
   // Navigate to features
@@ -214,6 +268,276 @@ export default function CallScreen() {
       );
     }
   };
+
+  // Themed Copy Alert Component
+  const ThemedCopyAlert = () => (
+    <Modal
+      transparent
+      visible={showCopyAlert}
+      animationType="fade"
+      onRequestClose={() => setShowCopyAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowCopyAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: theme.accent }]}>
+            <Ionicons name="checkmark" size={24} color="#fff" />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>Copied</Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            Phone number copied to clipboard
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowCopyAlert(false)}
+            style={[styles.alertButton, { backgroundColor: theme.accent }]}
+          >
+            <Text style={styles.alertButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // Themed Error/Info Alert Component
+  const ThemedErrorAlert = () => (
+    <Modal
+      transparent
+      visible={showErrorAlert}
+      animationType="fade"
+      onRequestClose={() => setShowErrorAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowErrorAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: errorMessage.includes("successfully") ? theme.accent : "#FF3B30" }]}>
+            <Ionicons 
+              name={errorMessage.includes("successfully") ? "checkmark" : "alert-circle"} 
+              size={24} 
+              color="#fff" 
+            />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>
+            {errorMessage.includes("successfully") ? "Success" : "Notice"}
+          </Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            {errorMessage}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowErrorAlert(false)}
+            style={[styles.alertButton, { backgroundColor: theme.accent }]}
+          >
+            <Text style={styles.alertButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // Themed Call Error Alert
+  const ThemedCallAlert = () => (
+    <Modal
+      transparent
+      visible={showCallAlert}
+      animationType="fade"
+      onRequestClose={() => setShowCallAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowCallAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: "#FF3B30" }]}>
+            <Ionicons name="call-outline" size={24} color="#fff" />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>Call Error</Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            Unable to make call. Please check permissions and try again.
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowCallAlert(false)}
+            style={[styles.alertButton, { backgroundColor: theme.accent }]}
+          >
+            <Text style={styles.alertButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // Themed Email Alert
+  const ThemedEmailAlert = () => (
+    <Modal
+      transparent
+      visible={showEmailAlert}
+      animationType="fade"
+      onRequestClose={() => setShowEmailAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowEmailAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: theme.accent }]}>
+            <Ionicons name="mail" size={24} color="#fff" />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>Email</Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            Email functionality will be available soon.
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowEmailAlert(false)}
+            style={[styles.alertButton, { backgroundColor: theme.accent }]}
+          >
+            <Text style={styles.alertButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // Themed Favorite Alert
+  const ThemedFavoriteAlert = () => (
+    <Modal
+      transparent
+      visible={showFavoriteAlert}
+      animationType="fade"
+      onRequestClose={() => setShowFavoriteAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowFavoriteAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: "#FFD700" }]}>
+            <Ionicons name="star" size={24} color="#fff" />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>
+            {favoriteAction === "added to" ? "Added to Favorites" : "Removed from Favorites"}
+          </Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            {name} {favoriteAction} favorites
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowFavoriteAlert(false)}
+            style={[styles.alertButton, { backgroundColor: theme.accent }]}
+          >
+            <Text style={styles.alertButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // Themed Delete Confirmation Alert
+  const ThemedDeleteAlert = () => (
+    <Modal
+      transparent
+      visible={showDeleteAlert}
+      animationType="fade"
+      onRequestClose={() => setShowDeleteAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowDeleteAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: "#FF3B30" }]}>
+            <Ionicons name="trash" size={24} color="#fff" />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>Delete Contact</Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            Are you sure you want to permanently delete {name} from your phone's contacts?
+          </Text>
+          <View style={styles.alertButtonRow}>
+            <TouchableOpacity
+              onPress={() => setShowDeleteAlert(false)}
+              style={[styles.alertButton, styles.alertButtonHalf, { backgroundColor: theme.secondaryText }]}
+            >
+              <Text style={styles.alertButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={confirmDelete}
+              style={[styles.alertButton, styles.alertButtonHalf, { backgroundColor: "#FF3B30" }]}
+            >
+              <Text style={styles.alertButtonText}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // Themed Video Alert Component
+  const ThemedVideoAlert = () => (
+    <Modal
+      transparent
+      visible={showVideoAlert}
+      animationType="fade"
+      onRequestClose={() => setShowVideoAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowVideoAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.videoAlertBox, { backgroundColor: theme.inputBg }]}>
+          <Text style={[styles.videoAlertTitle, { color: theme.text }]}>
+            Video Call
+          </Text>
+          <Text style={[styles.videoAlertSubtitle, { color: theme.secondaryText }]}>
+            Would you like to use:
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.videoOption, { borderBottomColor: theme.itemBorder }]}
+            onPress={() => {
+              setShowVideoAlert(false);
+              openWhatsAppCall();
+            }}
+          >
+            <View style={[styles.videoOptionIcon, { backgroundColor: '#25D366' }]}>
+              <Ionicons name="logo-whatsapp" size={24} color="#fff" />
+            </View>
+            <Text style={[styles.videoOptionText, { color: theme.text }]}>WhatsApp</Text>
+            <Ionicons name="chevron-forward" size={20} color={theme.secondaryText} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.videoOption, { borderBottomColor: theme.itemBorder }]}
+            onPress={() => {
+              setShowVideoAlert(false);
+              openGoogleDuo();
+            }}
+          >
+            <View style={[styles.videoOptionIcon, { backgroundColor: '#4285F4' }]}>
+              <MaterialIcons name="duo" size={24} color="#fff" />
+            </View>
+            <Text style={[styles.videoOptionText, { color: theme.text }]}>Google Duo</Text>
+            <Ionicons name="chevron-forward" size={20} color={theme.secondaryText} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.videoCancelButton}
+            onPress={() => setShowVideoAlert(false)}
+          >
+            <Text style={[styles.videoCancelText, { color: theme.secondaryText }]}>
+              Cancel
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
 
   const styles = createStyles(theme, isDark);
 
@@ -394,8 +718,23 @@ export default function CallScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* All Themed Alerts */}
+      <ThemedCopyAlert />
+      <ThemedErrorAlert />
+      <ThemedCallAlert />
+      <ThemedEmailAlert />
+      <ThemedFavoriteAlert />
+      <ThemedDeleteAlert />
+      <ThemedVideoAlert />
+
       {/* Black Tab Bar */}
-      <View style={styles.tabBar} />
+      <View style={[
+        styles.tabBar,
+        {
+          backgroundColor: theme.inputBg,
+          borderTopColor: theme.itemBorder,
+        }
+      ]} />
     </SafeAreaView>
   );
 }
@@ -634,13 +973,119 @@ const createStyles = (theme: any, isDark: boolean) =>
       flexDirection: "row",
       justifyContent: "space-around",
       alignItems: "center",
-      backgroundColor: "#000",
-      paddingVertical: 30,
+      paddingVertical: 15,
       borderTopWidth: 1,
-      borderTopColor: "#222",
       position: "absolute",
       bottom: 0,
       left: 0,
       right: 0,
+    },
+    // Themed Alert Modal Styles
+    modalOverlay: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      backgroundColor: "rgba(0,0,0,0.5)",
+    },
+    alertBox: {
+      width: width > 600 ? 320 : 280,
+      borderRadius: 16,
+      padding: 24,
+      alignItems: "center",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    alertIcon: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 16,
+    },
+    alertTitle: {
+      fontSize: 20,
+      fontWeight: "bold",
+      marginBottom: 8,
+    },
+    alertMessage: {
+      fontSize: 14,
+      textAlign: "center",
+      marginBottom: 20,
+      lineHeight: 20,
+    },
+    alertButton: {
+      paddingVertical: 12,
+      paddingHorizontal: 32,
+      borderRadius: 8,
+      minWidth: 100,
+      alignItems: "center",
+    },
+    alertButtonText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "600",
+    },
+    alertButtonRow: {
+      flexDirection: "row",
+      gap: 12,
+      width: "100%",
+    },
+    alertButtonHalf: {
+      flex: 1,
+      minWidth: 0,
+    },
+    // Themed Video Alert Styles
+    videoAlertBox: {
+      width: width > 600 ? 340 : 300,
+      borderRadius: 16,
+      padding: 20,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    videoAlertTitle: {
+      fontSize: 22,
+      fontWeight: "bold",
+      marginBottom: 8,
+      textAlign: "center",
+    },
+    videoAlertSubtitle: {
+      fontSize: 15,
+      textAlign: "center",
+      marginBottom: 20,
+    },
+    videoOption: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 16,
+      borderBottomWidth: 1,
+    },
+    videoOptionIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      justifyContent: "center",
+      alignItems: "center",
+      marginRight: 12,
+    },
+    videoOptionText: {
+      flex: 1,
+      fontSize: 17,
+      fontWeight: "500",
+    },
+    videoCancelButton: {
+      paddingVertical: 16,
+      alignItems: "center",
+      marginTop: 8,
+    },
+    videoCancelText: {
+      fontSize: 17,
+      fontWeight: "600",
     },
   });

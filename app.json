@@ -18,7 +18,8 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png",
         "permissions": [
-          "CALL_PHONE"
+          "CALL_PHONE",
+          "READ_CALL_LOG"
         ]
       },
       "edgeToEdgeEnabled": true,
@@ -26,7 +27,8 @@
       "permissions": [
         "android.permission.READ_CONTACTS",
         "android.permission.WRITE_CONTACTS",
-        "android.permission.CALL_PHONE"
+        "android.permission.CALL_PHONE",
+        "android.permission.READ_CALL_LOG"
       ],
       "package": "com.anonymous.contact"
     },
