@@ -10,85 +10,126 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Dimensions,
 } from "react-native";
 import * as Contacts from "expo-contacts";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { Stack, router } from "expo-router";
 import * as ImageManipulator from "expo-image-manipulator";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../_ThemeContext";
 
+const { width } = Dimensions.get("window");
+
 export default function AddContactScreen() {
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [photo, setPhoto] = useState<string | null>(null);
+  const [contactData, setContactData] = useState({
+    firstName: "",
+    lastName: "", 
+    company: "",
+    phoneNumbers: [{ id: "1", label: "mobile", number: "" }],
+    emails: [{ id: "1", label: "home", email: "" }],
+    address: "",
+    birthday: "",
+    notes: "",
+    imageUri: "",
+  });
+
   const [hasContactsPermission, setHasContactsPermission] = useState<boolean | null>(null);
   const [hasMediaPermission, setHasMediaPermission] = useState<boolean | null>(null);
 
   const { theme } = useTheme();
 
-  // 📸 Pick an image from the library
-  const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    setHasMediaPermission(status === "granted");
+  // Request contacts permission on mount
+  useEffect(() => {
+    requestContactsPermission();
+  }, []);
 
-    if (status !== "granted") {
-      Alert.alert("Permission denied", "We need access to your gallery.");
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      // Resize image to a smaller size before setting it
-      const resizedImage = await ImageManipulator.manipulateAsync(
-        result.assets[0].uri,
-        [{ resize: { width: 300, height: 300 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
-      );
-      setPhoto(resizedImage.uri);
-    }
-  };
-
-  // 📱 Request contacts permission
   const requestContactsPermission = async () => {
     const { status } = await Contacts.requestPermissionsAsync();
     setHasContactsPermission(status === "granted");
   };
 
-  // 💾 Save the contact
-  const handleSave = async () => {
-    if (!name || !phone) {
-      Alert.alert("Missing Info", "Please enter at least a name and phone number.");
+  // Pick an image from the library
+  const pickImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      setHasMediaPermission(permissionResult.granted);
+
+      if (!permissionResult.granted) {
+        Alert.alert("Permission Required", "Please allow access to your photo library");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        // Resize image to a smaller size
+        const resizedImage = await ImageManipulator.manipulateAsync(
+          result.assets[0].uri,
+          [{ resize: { width: 300, height: 300 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        setContactData({ ...contactData, imageUri: resizedImage.uri });
+      }
+    } catch (error) {
+      console.error("Error picking image:", error);
+      Alert.alert("Error", "Failed to pick image");
+    }
+  };
+
+  // Save the contact
+  const saveContact = async () => {
+    if (!contactData.firstName && !contactData.lastName) {
+      Alert.alert("Missing Info", "Please enter at least a first or last name");
       return;
     }
 
     if (!hasContactsPermission) {
-      Alert.alert("Permission denied", "We need access to your contacts.");
+      Alert.alert("Permission Denied", "We need access to your contacts to save");
+      return;
+    }
+
+    // Check if at least one phone number is provided
+    const hasPhone = contactData.phoneNumbers.some(p => p.number.trim() !== "");
+    if (!hasPhone) {
+      Alert.alert("Missing Info", "Please enter at least one phone number");
       return;
     }
 
     try {
       console.log("Saving contact...");
 
-      const newContact: any = {
-        [Contacts.Fields.FirstName]: name,
-        [Contacts.Fields.PhoneNumbers]: [{ label: "mobile", number: phone }],
+      const newContact = {
+        [Contacts.Fields.FirstName]: contactData.firstName,
+        [Contacts.Fields.LastName]: contactData.lastName,
+        [Contacts.Fields.Company]: contactData.company,
+        [Contacts.Fields.PhoneNumbers]: contactData.phoneNumbers
+          .filter((p) => p.number.trim() !== "")
+          .map((p) => ({
+            label: p.label,
+            number: p.number,
+          })),
+        [Contacts.Fields.Emails]: contactData.emails
+          .filter((e) => e.email.trim() !== "")
+          .map((e) => ({
+            label: e.label,
+            email: e.email,
+          })),
+        [Contacts.Fields.Addresses]: contactData.address
+          ? [{ label: "home", street: contactData.address }]
+          : [],
+        [Contacts.Fields.Note]: contactData.notes,
       };
 
-      if (email) {
-        newContact[Contacts.Fields.Emails] = [{ label: "work", email }];
-      }
-
-      if (photo) {
-        newContact[Contacts.Fields.Image] = { uri: photo };
+      // Add image if available
+      if (contactData.imageUri) {
+        newContact[Contacts.Fields.Image] = { uri: contactData.imageUri };
       }
 
       // Add the contact to the device's contacts
@@ -98,168 +139,452 @@ export default function AddContactScreen() {
       router.back();
     } catch (error) {
       console.error("Error saving contact:", error);
-      Alert.alert("Error", "Failed to save contact.");
+      Alert.alert("Error", "Failed to save contact");
     }
   };
 
-  // 📲 Check if we have permission on mount
-  useEffect(() => {
-    requestContactsPermission();
-  }, []);
+  const addPhoneNumber = () => {
+    const newId = String(Date.now());
+    setContactData({
+      ...contactData,
+      phoneNumbers: [
+        ...contactData.phoneNumbers,
+        { id: newId, label: "mobile", number: "" },
+      ],
+    });
+  };
 
-  const styles = createStyles(theme);
+  const removePhoneNumber = (id: string) => {
+    if (contactData.phoneNumbers.length === 1) {
+      Alert.alert("Error", "At least one phone number field is required");
+      return;
+    }
+    setContactData({
+      ...contactData,
+      phoneNumbers: contactData.phoneNumbers.filter((p) => p.id !== id),
+    });
+  };
+
+  const updatePhoneNumber = (id: string, field: string, value: string) => {
+    setContactData({
+      ...contactData,
+      phoneNumbers: contactData.phoneNumbers.map((p) =>
+        p.id === id ? { ...p, [field]: value } : p
+      ),
+    });
+  };
+
+  const addEmail = () => {
+    const newId = String(Date.now());
+    setContactData({
+      ...contactData,
+      emails: [...contactData.emails, { id: newId, label: "home", email: "" }],
+    });
+  };
+
+  const removeEmail = (id: string) => {
+    if (contactData.emails.length === 1) {
+      Alert.alert("Error", "At least one email field is required");
+      return;
+    }
+    setContactData({
+      ...contactData,
+      emails: contactData.emails.filter((e) => e.id !== id),
+    });
+  };
+
+  const updateEmail = (id: string, field: string, value: string) => {
+    setContactData({
+      ...contactData,
+      emails: contactData.emails.map((e) =>
+        e.id === id ? { ...e, [field]: value } : e
+      ),
+    });
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: theme.background }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
-        <ScrollView contentContainerStyle={styles.container}>
-          {/* Header */}
-          <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()}>
-              <Ionicons name="arrow-back" size={26} color={theme.accent} />
+      <Stack.Screen
+        options={{
+          title: "New Contact",
+          headerTitleStyle: { color: theme.text },
+          headerStyle: { backgroundColor: theme.background },
+          headerTintColor: theme.accent,
+          headerRight: () => (
+            <TouchableOpacity onPress={saveContact} style={{ marginRight: 10 }}>
+              <Text style={{ color: theme.accent, fontSize: 16, fontWeight: "600" }}>
+                Save
+              </Text>
             </TouchableOpacity>
-            <Text style={styles.title}>New Contact</Text>
-            <View style={{ width: 26 }} />
-          </View>
+          ),
+        }}
+      />
 
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          style={[styles.container, { backgroundColor: theme.background }]}
+          contentContainerStyle={styles.scrollContent}
+        >
           {/* Avatar Section */}
-          <View style={styles.avatarContainer}>
-            <TouchableOpacity onPress={pickImage} activeOpacity={0.8}>
-              {photo ? (
-                <Image source={{ uri: photo }} style={styles.avatarImage} />
+          <View style={styles.avatarSection}>
+            <TouchableOpacity onPress={pickImage} style={styles.avatarTouchable}>
+              {contactData.imageUri ? (
+                <Image
+                  source={{ uri: contactData.imageUri }}
+                  style={styles.avatarImage}
+                />
               ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Ionicons name="person" size={60} color="#aaa" />
+                <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
+                  <Text style={styles.avatarText}>
+                    {contactData.firstName
+                      ? contactData.firstName.charAt(0).toUpperCase()
+                      : "?"}
+                  </Text>
                 </View>
               )}
+              <View style={styles.cameraIconContainer}>
+                <Ionicons name="camera" size={20} color="#fff" />
+              </View>
             </TouchableOpacity>
-            <TouchableOpacity onPress={pickImage}>
-              <Text style={styles.addPhotoText}>
-                {photo ? "Change photo" : "Add photo"}
+            <TouchableOpacity style={styles.changePhotoButton} onPress={pickImage}>
+              <Text style={[styles.changePhotoText, { color: theme.accent }]}>
+                {contactData.imageUri ? "Change Photo" : "Add Photo"}
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* Input Fields */}
-          <View style={styles.form}>
-            <View style={styles.inputContainer}>
-              <Ionicons name="person-outline" size={20} color="#777" />
+          {/* Name Section */}
+          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <View style={styles.inputGroup}>
+              <Ionicons name="person-outline" size={20} color={theme.secondaryText} />
               <TextInput
-                style={styles.input}
-                placeholder="Full Name"
+                style={[styles.input, { color: theme.text }]}
+                placeholder="First Name"
                 placeholderTextColor={theme.secondaryText}
-                value={name}
-                onChangeText={setName}
+                value={contactData.firstName}
+                onChangeText={(text) =>
+                  setContactData({ ...contactData, firstName: text })
+                }
               />
             </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons name="call-outline" size={20} color="#777" />
+            <View style={[styles.inputGroup, { borderTopColor: theme.itemBorder, borderTopWidth: 1 }]}>
+              <Ionicons name="person-outline" size={20} color={theme.secondaryText} />
               <TextInput
-                style={styles.input}
-                placeholder="Phone Number"
+                style={[styles.input, { color: theme.text }]}
+                placeholder="Last Name"
                 placeholderTextColor={theme.secondaryText}
-                keyboardType="phone-pad"
-                value={phone}
-                onChangeText={setPhone}
+                value={contactData.lastName}
+                onChangeText={(text) =>
+                  setContactData({ ...contactData, lastName: text })
+                }
               />
             </View>
-
-            <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color="#777" />
+            <View style={[styles.inputGroup, { borderTopColor: theme.itemBorder, borderTopWidth: 1 }]}>
+              <Ionicons name="business-outline" size={20} color={theme.secondaryText} />
               <TextInput
-                style={styles.input}
-                placeholder="Email (optional)"
+                style={[styles.input, { color: theme.text }]}
+                placeholder="Company"
                 placeholderTextColor={theme.secondaryText}
-                keyboardType="email-address"
-                value={email}
-                onChangeText={setEmail}
+                value={contactData.company}
+                onChangeText={(text) =>
+                  setContactData({ ...contactData, company: text })
+                }
               />
             </View>
           </View>
 
-          {/* Save Button */}
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-            <Text style={styles.saveText}>Save</Text>
+          {/* Phone Numbers Section */}
+          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <Text style={[styles.sectionTitle, { color: theme.secondaryText }]}>
+              PHONE NUMBERS
+            </Text>
+            {contactData.phoneNumbers.map((phoneItem, index) => (
+              <View key={phoneItem.id}>
+                <View
+                  style={[
+                    styles.inputGroup,
+                    index > 0 && { borderTopColor: theme.itemBorder, borderTopWidth: 1 },
+                  ]}
+                >
+                  <Ionicons name="call-outline" size={20} color={theme.secondaryText} />
+                  <View style={styles.multiInputContainer}>
+                    <TextInput
+                      style={[styles.labelInput, { color: theme.text }]}
+                      placeholder="Label"
+                      placeholderTextColor={theme.secondaryText}
+                      value={phoneItem.label}
+                      onChangeText={(text) =>
+                        updatePhoneNumber(phoneItem.id, "label", text)
+                      }
+                    />
+                    <TextInput
+                      style={[styles.input, { color: theme.text }]}
+                      placeholder="Phone Number"
+                      placeholderTextColor={theme.secondaryText}
+                      keyboardType="phone-pad"
+                      value={phoneItem.number}
+                      onChangeText={(text) =>
+                        updatePhoneNumber(phoneItem.id, "number", text)
+                      }
+                    />
+                  </View>
+                  {contactData.phoneNumbers.length > 1 && (
+                    <TouchableOpacity
+                      onPress={() => removePhoneNumber(phoneItem.id)}
+                      style={styles.removeButton}
+                    >
+                      <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.addButton} onPress={addPhoneNumber}>
+              <Ionicons name="add-circle-outline" size={22} color={theme.accent} />
+              <Text style={[styles.addButtonText, { color: theme.accent }]}>
+                Add Phone Number
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Email Section */}
+          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <Text style={[styles.sectionTitle, { color: theme.secondaryText }]}>
+              EMAIL ADDRESSES
+            </Text>
+            {contactData.emails.map((emailItem, index) => (
+              <View key={emailItem.id}>
+                <View
+                  style={[
+                    styles.inputGroup,
+                    index > 0 && { borderTopColor: theme.itemBorder, borderTopWidth: 1 },
+                  ]}
+                >
+                  <Ionicons name="mail-outline" size={20} color={theme.secondaryText} />
+                  <View style={styles.multiInputContainer}>
+                    <TextInput
+                      style={[styles.labelInput, { color: theme.text }]}
+                      placeholder="Label"
+                      placeholderTextColor={theme.secondaryText}
+                      value={emailItem.label}
+                      onChangeText={(text) =>
+                        updateEmail(emailItem.id, "label", text)
+                      }
+                    />
+                    <TextInput
+                      style={[styles.input, { color: theme.text }]}
+                      placeholder="Email Address"
+                      placeholderTextColor={theme.secondaryText}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      value={emailItem.email}
+                      onChangeText={(text) =>
+                        updateEmail(emailItem.id, "email", text)
+                      }
+                    />
+                  </View>
+                  {contactData.emails.length > 1 && (
+                    <TouchableOpacity
+                      onPress={() => removeEmail(emailItem.id)}
+                      style={styles.removeButton}
+                    >
+                      <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.addButton} onPress={addEmail}>
+              <Ionicons name="add-circle-outline" size={22} color={theme.accent} />
+              <Text style={[styles.addButtonText, { color: theme.accent }]}>
+                Add Email
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Additional Info Section */}
+          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <View style={styles.inputGroup}>
+              <Ionicons name="location-outline" size={20} color={theme.secondaryText} />
+              <TextInput
+                style={[styles.input, { color: theme.text }]}
+                placeholder="Address"
+                placeholderTextColor={theme.secondaryText}
+                value={contactData.address}
+                onChangeText={(text) =>
+                  setContactData({ ...contactData, address: text })
+                }
+              />
+            </View>
+            <View style={[styles.inputGroup, { borderTopColor: theme.itemBorder, borderTopWidth: 1 }]}>
+              <Ionicons name="calendar-outline" size={20} color={theme.secondaryText} />
+              <TextInput
+                style={[styles.input, { color: theme.text }]}
+                placeholder="Birthday (MM/DD/YYYY)"
+                placeholderTextColor={theme.secondaryText}
+                value={contactData.birthday}
+                onChangeText={(text) =>
+                  setContactData({ ...contactData, birthday: text })
+                }
+              />
+            </View>
+          </View>
+
+          {/* Notes Section */}
+          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <View style={styles.inputGroup}>
+              <Ionicons
+                name="document-text-outline"
+                size={20}
+                color={theme.secondaryText}
+              />
+              <TextInput
+                style={[styles.input, styles.notesInput, { color: theme.text }]}
+                placeholder="Notes"
+                placeholderTextColor={theme.secondaryText}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                value={contactData.notes}
+                onChangeText={(text) =>
+                  setContactData({ ...contactData, notes: text })
+                }
+              />
+            </View>
+          </View>
+
+          {/* Save Button (Bottom) */}
+          <TouchableOpacity
+            style={[styles.saveButton, { backgroundColor: theme.accent }]}
+            onPress={saveContact}
+          >
+            <Text style={styles.saveButtonText}>Save Contact</Text>
           </TouchableOpacity>
+
+          {/* Bottom Spacing */}
+          <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const createStyles = (theme: any) =>
-  StyleSheet.create({
-    container: {
-      flexGrow: 1,
-      padding: 20,
-      backgroundColor: theme.background,
-    },
-    header: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 30,
-    },
-    title: {
-      fontSize: 20,
-      fontWeight: "600",
-      color: theme.text,
-    },
-    avatarContainer: {
-      alignItems: "center",
-      marginBottom: 30,
-    },
-    avatarPlaceholder: {
-      width: 100,
-      height: 100,
-      borderRadius: 50,
-      backgroundColor: theme.inputBg,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    avatarImage: {
-      width: 100,
-      height: 100,
-      borderRadius: 50,
-    },
-    addPhotoText: {
-      color: theme.accent,
-      marginTop: 8,
-      fontSize: 16,
-    },
-    form: {
-      width: "100%",
-    },
-    inputContainer: {
-      flexDirection: "row",
-      alignItems: "center",
-      backgroundColor: theme.inputBg,
-      borderRadius: 10,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      marginBottom: 15,
-    },
-    input: {
-      flex: 1,
-      marginLeft: 10,
-      fontSize: 16,
-      color: theme.text,
-    },
-    saveButton: {
-      backgroundColor: theme.accent,
-      borderRadius: 10,
-      paddingVertical: 14,
-      alignItems: "center",
-      justifyContent: "center",
-      marginTop: 10,
-    },
-    saveText: {
-      color: "#fff",
-      fontSize: 18,
-      fontWeight: "600",
-    },
-  });
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingTop: 10,
+  },
+  avatarSection: {
+    alignItems: "center",
+    paddingVertical: 20,
+  },
+  avatarTouchable: {
+    position: "relative",
+    marginBottom: 10,
+  },
+  avatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+  },
+  avatarText: {
+    color: "#fff",
+    fontSize: 40,
+    fontWeight: "bold",
+  },
+  cameraIconContainer: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    backgroundColor: "#007AFF",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  changePhotoButton: {
+    paddingVertical: 8,
+  },
+  changePhotoText: {
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  section: {
+    marginHorizontal: width > 600 ? 40 : 20,
+    marginBottom: 20,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    textTransform: "uppercase",
+  },
+  inputGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  input: {
+    flex: 1,
+    fontSize: 16,
+    marginLeft: 12,
+    paddingVertical: 8,
+  },
+  labelInput: {
+    fontSize: 14,
+    marginBottom: 6,
+  },
+  multiInputContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  notesInput: {
+    minHeight: 80,
+  },
+  removeButton: {
+    padding: 4,
+  },
+  addButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  addButtonText: {
+    fontSize: 16,
+    marginLeft: 8,
+    fontWeight: "500",
+  },
+  saveButton: {
+    marginHorizontal: width > 600 ? 40 : 20,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  saveButtonText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+});

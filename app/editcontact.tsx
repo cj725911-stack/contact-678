@@ -2,27 +2,28 @@ import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
-  StyleSheet,
-  TouchableOpacity,
   TextInput,
-  ScrollView,
+  TouchableOpacity,
+  StyleSheet,
+  Image,
+  Alert,
   KeyboardAvoidingView,
   Platform,
-  Alert,
+  ScrollView,
   Dimensions,
-  Image,
+  ActivityIndicator,
 } from "react-native";
-import { Stack, useRouter, useLocalSearchParams } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useTheme } from "../_ThemeContext";
 import * as Contacts from "expo-contacts";
 import * as ImagePicker from "expo-image-picker";
+import { Ionicons } from "@expo/vector-icons";
+import { Stack, router, useLocalSearchParams } from "expo-router";
+import * as ImageManipulator from "expo-image-manipulator";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useTheme } from "../_ThemeContext";
 
 const { width } = Dimensions.get("window");
 
 export default function EditContactScreen() {
-  const router = useRouter();
   const { theme } = useTheme();
   const params = useLocalSearchParams();
   const contactId = params.id as string;
@@ -33,24 +34,25 @@ export default function EditContactScreen() {
     company: "",
     phoneNumbers: [{ id: "1", label: "mobile", number: "" }],
     emails: [{ id: "1", label: "home", email: "" }],
-    address: "",
+    addresses: [{ id: "1", label: "home", street: "", city: "", state: "", postalCode: "" }],
     birthday: "",
     notes: "",
     imageUri: "",
   });
 
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [originalContact, setOriginalContact] = useState<any>(null);
 
   useEffect(() => {
-    loadContact();
-  }, []);
+    if (contactId) {
+      loadContact();
+    } else {
+      setLoading(false);
+    }
+  }, [contactId]);
 
   const loadContact = async () => {
-    if (!contactId) {
-      setLoading(false);
-      return;
-    }
-
     try {
       const { status } = await Contacts.requestPermissionsAsync();
       if (status !== "granted") {
@@ -60,7 +62,31 @@ export default function EditContactScreen() {
       }
 
       const contact = await Contacts.getContactByIdAsync(contactId);
+      
       if (contact) {
+        console.log("Loaded contact:", contact);
+        setOriginalContact(contact);
+
+        // Parse birthday if available
+        let birthdayString = "";
+        if (contact.birthday) {
+          const { month, day, year } = contact.birthday;
+          birthdayString = `${month?.toString().padStart(2, '0')}/${day?.toString().padStart(2, '0')}/${year || new Date().getFullYear()}`;
+        }
+
+        // Parse addresses
+        let addressesArray = [{ id: "1", label: "home", street: "", city: "", state: "", postalCode: "" }];
+        if (contact.addresses && contact.addresses.length > 0) {
+          addressesArray = contact.addresses.map((addr, index) => ({
+            id: String(index + 1),
+            label: addr.label || "home",
+            street: addr.street || "",
+            city: addr.city || "",
+            state: addr.region || "",
+            postalCode: addr.postalCode || "",
+          }));
+        }
+
         setContactData({
           firstName: contact.firstName || "",
           lastName: contact.lastName || "",
@@ -68,7 +94,7 @@ export default function EditContactScreen() {
           phoneNumbers:
             contact.phoneNumbers && contact.phoneNumbers.length > 0
               ? contact.phoneNumbers.map((p, index) => ({
-                  id: String(index),
+                  id: String(index + 1),
                   label: p.label || "mobile",
                   number: p.number || "",
                 }))
@@ -76,25 +102,24 @@ export default function EditContactScreen() {
           emails:
             contact.emails && contact.emails.length > 0
               ? contact.emails.map((e, index) => ({
-                  id: String(index),
+                  id: String(index + 1),
                   label: e.label || "home",
                   email: e.email || "",
                 }))
               : [{ id: "1", label: "home", email: "" }],
-          address:
-            contact.addresses && contact.addresses.length > 0
-              ? contact.addresses[0].street || ""
-              : "",
-          birthday: contact.birthday
-            ? `${contact.birthday.month}/${contact.birthday.day}/${contact.birthday.year}`
-            : "",
+          addresses: addressesArray,
+          birthday: birthdayString,
           notes: contact.note || "",
           imageUri: contact.image?.uri || "",
         });
+      } else {
+        Alert.alert("Error", "Contact not found");
+        router.back();
       }
     } catch (error) {
       console.error("Error loading contact:", error);
       Alert.alert("Error", "Failed to load contact");
+      router.back();
     } finally {
       setLoading(false);
     }
@@ -113,11 +138,17 @@ export default function EditContactScreen() {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.5,
+        quality: 0.6,
       });
 
       if (!result.canceled && result.assets[0]) {
-        setContactData({ ...contactData, imageUri: result.assets[0].uri });
+        // Resize image
+        const resizedImage = await ImageManipulator.manipulateAsync(
+          result.assets[0].uri,
+          [{ resize: { width: 400, height: 400 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        setContactData({ ...contactData, imageUri: resizedImage.uri });
       }
     } catch (error) {
       console.error("Error picking image:", error);
@@ -131,34 +162,66 @@ export default function EditContactScreen() {
       return;
     }
 
+    const hasPhone = contactData.phoneNumbers.some(p => p.number.trim() !== "");
+    if (!hasPhone) {
+      Alert.alert("Error", "Please enter at least one phone number");
+      return;
+    }
+
+    setSaving(true);
+
     try {
       const { status } = await Contacts.requestPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Permission Denied", "Cannot save contact without permission");
+        setSaving(false);
         return;
       }
 
-      const contact = {
+      // Parse birthday
+      let birthdayObj = undefined;
+      if (contactData.birthday) {
+        const parts = contactData.birthday.split("/");
+        if (parts.length === 3) {
+          birthdayObj = {
+            month: parseInt(parts[0]),
+            day: parseInt(parts[1]),
+            year: parseInt(parts[2]),
+          };
+        }
+      }
+
+      const contact: any = {
         [Contacts.Fields.FirstName]: contactData.firstName,
         [Contacts.Fields.LastName]: contactData.lastName,
         [Contacts.Fields.Company]: contactData.company,
         [Contacts.Fields.PhoneNumbers]: contactData.phoneNumbers
-          .filter((p) => p.number)
+          .filter((p) => p.number.trim() !== "")
           .map((p) => ({
             label: p.label,
             number: p.number,
           })),
         [Contacts.Fields.Emails]: contactData.emails
-          .filter((e) => e.email)
+          .filter((e) => e.email.trim() !== "")
           .map((e) => ({
             label: e.label,
             email: e.email,
           })),
-        [Contacts.Fields.Addresses]: contactData.address
-          ? [{ label: "home", street: contactData.address }]
-          : [],
+        [Contacts.Fields.Addresses]: contactData.addresses
+          .filter((a) => a.street.trim() !== "" || a.city.trim() !== "")
+          .map((a) => ({
+            label: a.label,
+            street: a.street,
+            city: a.city,
+            region: a.state,
+            postalCode: a.postalCode,
+          })),
         [Contacts.Fields.Note]: contactData.notes,
       };
+
+      if (birthdayObj) {
+        contact[Contacts.Fields.Birthday] = birthdayObj;
+      }
 
       // Add image if available
       if (contactData.imageUri) {
@@ -171,20 +234,50 @@ export default function EditContactScreen() {
           id: contactId,
           ...contact,
         });
-        Alert.alert("Success", "Contact updated successfully");
-      } else {
-        // Add new contact
-        await Contacts.addContactAsync(contact);
-        Alert.alert("Success", "Contact saved successfully");
+        Alert.alert("Success", "Contact updated successfully", [
+          { text: "OK", onPress: () => router.back() }
+        ]);
       }
-      
-      router.back();
     } catch (error) {
-      Alert.alert("Error", "Failed to save contact");
-      console.error(error);
+      console.error("Error saving contact:", error);
+      Alert.alert("Error", "Failed to save contact. Please try again.");
+    } finally {
+      setSaving(false);
     }
   };
 
+  const deleteContact = () => {
+    Alert.alert(
+      "Delete Contact",
+      "Are you sure you want to delete this contact? This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const { status } = await Contacts.requestPermissionsAsync();
+              if (status !== "granted") {
+                Alert.alert("Permission Denied", "Cannot delete contact without permission");
+                return;
+              }
+
+              await Contacts.removeContactAsync(contactId);
+              Alert.alert("Success", "Contact deleted successfully", [
+                { text: "OK", onPress: () => router.back() }
+              ]);
+            } catch (error) {
+              console.error("Error deleting contact:", error);
+              Alert.alert("Error", "Failed to delete contact");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Phone number functions
   const addPhoneNumber = () => {
     const newId = String(Date.now());
     setContactData({
@@ -216,6 +309,7 @@ export default function EditContactScreen() {
     });
   };
 
+  // Email functions
   const addEmail = () => {
     const newId = String(Date.now());
     setContactData({
@@ -244,29 +338,82 @@ export default function EditContactScreen() {
     });
   };
 
+  // Address functions
+  const addAddress = () => {
+    const newId = String(Date.now());
+    setContactData({
+      ...contactData,
+      addresses: [
+        ...contactData.addresses,
+        { id: newId, label: "home", street: "", city: "", state: "", postalCode: "" },
+      ],
+    });
+  };
+
+  const removeAddress = (id: string) => {
+    setContactData({
+      ...contactData,
+      addresses: contactData.addresses.filter((a) => a.id !== id),
+    });
+  };
+
+  const updateAddress = (id: string, field: string, value: string) => {
+    setContactData({
+      ...contactData,
+      addresses: contactData.addresses.map((a) =>
+        a.id === id ? { ...a, [field]: value } : a
+      ),
+    });
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
+        <Stack.Screen
+          options={{
+            title: "Loading...",
+            headerTitleStyle: { color: theme.text },
+            headerStyle: { backgroundColor: theme.background },
+            headerTintColor: theme.accent,
+          }}
+        />
         <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
-          <Text style={{ color: theme.text }}>Loading...</Text>
+          <ActivityIndicator size="large" color={theme.accent} />
+          <Text style={[styles.loadingText, { color: theme.text }]}>
+            Loading contact...
+          </Text>
         </View>
       </SafeAreaView>
     );
   }
 
+  const getInitials = () => {
+    const first = contactData.firstName.charAt(0).toUpperCase();
+    const last = contactData.lastName.charAt(0).toUpperCase();
+    return first || last || "?";
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
       <Stack.Screen
         options={{
-          title: contactId ? "Edit Contact" : "Add Contact",
+          title: "Edit Contact",
           headerTitleStyle: { color: theme.text },
           headerStyle: { backgroundColor: theme.background },
           headerTintColor: theme.accent,
           headerRight: () => (
-            <TouchableOpacity onPress={saveContact} style={{ marginRight: 10 }}>
-              <Text style={{ color: theme.accent, fontSize: 16, fontWeight: "600" }}>
-                Save
-              </Text>
+            <TouchableOpacity 
+              onPress={saveContact} 
+              style={{ marginRight: 10 }}
+              disabled={saving}
+            >
+              {saving ? (
+                <ActivityIndicator size="small" color={theme.accent} />
+              ) : (
+                <Text style={{ color: theme.accent, fontSize: 16, fontWeight: "600" }}>
+                  Done
+                </Text>
+              )}
             </TouchableOpacity>
           ),
         }}
@@ -279,6 +426,7 @@ export default function EditContactScreen() {
         <ScrollView
           style={[styles.container, { backgroundColor: theme.background }]}
           contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
         >
           {/* Avatar Section */}
           <View style={styles.avatarSection}>
@@ -290,15 +438,11 @@ export default function EditContactScreen() {
                 />
               ) : (
                 <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
-                  <Text style={styles.avatarText}>
-                    {contactData.firstName
-                      ? contactData.firstName.charAt(0).toUpperCase()
-                      : "?"}
-                  </Text>
+                  <Text style={styles.avatarText}>{getInitials()}</Text>
                 </View>
               )}
-              <View style={styles.cameraIconContainer}>
-                <Ionicons name="camera" size={20} color="#fff" />
+              <View style={[styles.cameraIconContainer, { backgroundColor: theme.accent }]}>
+                <Ionicons name="camera" size={18} color="#fff" />
               </View>
             </TouchableOpacity>
             <TouchableOpacity style={styles.changePhotoButton} onPress={pickImage}>
@@ -311,7 +455,7 @@ export default function EditContactScreen() {
           {/* Name Section */}
           <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
             <View style={styles.inputGroup}>
-              <Ionicons name="person-outline" size={20} color={theme.secondaryText} />
+              <Ionicons name="person-outline" size={22} color={theme.secondaryText} />
               <TextInput
                 style={[styles.input, { color: theme.text }]}
                 placeholder="First Name"
@@ -322,8 +466,9 @@ export default function EditContactScreen() {
                 }
               />
             </View>
-            <View style={[styles.inputGroup, { borderTopColor: theme.itemBorder, borderTopWidth: 1 }]}>
-              <Ionicons name="person-outline" size={20} color={theme.secondaryText} />
+            <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />
+            <View style={styles.inputGroup}>
+              <Ionicons name="person-outline" size={22} color={theme.secondaryText} />
               <TextInput
                 style={[styles.input, { color: theme.text }]}
                 placeholder="Last Name"
@@ -334,8 +479,9 @@ export default function EditContactScreen() {
                 }
               />
             </View>
-            <View style={[styles.inputGroup, { borderTopColor: theme.itemBorder, borderTopWidth: 1 }]}>
-              <Ionicons name="business-outline" size={20} color={theme.secondaryText} />
+            <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />
+            <View style={styles.inputGroup}>
+              <Ionicons name="business-outline" size={22} color={theme.secondaryText} />
               <TextInput
                 style={[styles.input, { color: theme.text }]}
                 placeholder="Company"
@@ -355,16 +501,12 @@ export default function EditContactScreen() {
             </Text>
             {contactData.phoneNumbers.map((phoneItem, index) => (
               <View key={phoneItem.id}>
-                <View
-                  style={[
-                    styles.inputGroup,
-                    index > 0 && { borderTopColor: theme.itemBorder, borderTopWidth: 1 },
-                  ]}
-                >
-                  <Ionicons name="call-outline" size={20} color={theme.secondaryText} />
+                {index > 0 && <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />}
+                <View style={styles.inputGroup}>
+                  <Ionicons name="call-outline" size={22} color={theme.secondaryText} />
                   <View style={styles.multiInputContainer}>
                     <TextInput
-                      style={[styles.labelInput, { color: theme.text }]}
+                      style={[styles.labelInput, { color: theme.secondaryText }]}
                       placeholder="Label"
                       placeholderTextColor={theme.secondaryText}
                       value={phoneItem.label}
@@ -373,7 +515,7 @@ export default function EditContactScreen() {
                       }
                     />
                     <TextInput
-                      style={[styles.input, { color: theme.text }]}
+                      style={[styles.valueInput, { color: theme.text }]}
                       placeholder="Phone Number"
                       placeholderTextColor={theme.secondaryText}
                       keyboardType="phone-pad"
@@ -388,16 +530,16 @@ export default function EditContactScreen() {
                       onPress={() => removePhoneNumber(phoneItem.id)}
                       style={styles.removeButton}
                     >
-                      <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                      <Ionicons name="remove-circle" size={24} color="#FF3B30" />
                     </TouchableOpacity>
                   )}
                 </View>
               </View>
             ))}
             <TouchableOpacity style={styles.addButton} onPress={addPhoneNumber}>
-              <Ionicons name="add-circle-outline" size={22} color={theme.accent} />
+              <Ionicons name="add-circle" size={24} color={theme.accent} />
               <Text style={[styles.addButtonText, { color: theme.accent }]}>
-                Add Phone Number
+                Add Phone
               </Text>
             </TouchableOpacity>
           </View>
@@ -405,20 +547,16 @@ export default function EditContactScreen() {
           {/* Email Section */}
           <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
             <Text style={[styles.sectionTitle, { color: theme.secondaryText }]}>
-              EMAIL ADDRESSES
+              EMAIL
             </Text>
             {contactData.emails.map((emailItem, index) => (
               <View key={emailItem.id}>
-                <View
-                  style={[
-                    styles.inputGroup,
-                    index > 0 && { borderTopColor: theme.itemBorder, borderTopWidth: 1 },
-                  ]}
-                >
-                  <Ionicons name="mail-outline" size={20} color={theme.secondaryText} />
+                {index > 0 && <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />}
+                <View style={styles.inputGroup}>
+                  <Ionicons name="mail-outline" size={22} color={theme.secondaryText} />
                   <View style={styles.multiInputContainer}>
                     <TextInput
-                      style={[styles.labelInput, { color: theme.text }]}
+                      style={[styles.labelInput, { color: theme.secondaryText }]}
                       placeholder="Label"
                       placeholderTextColor={theme.secondaryText}
                       value={emailItem.label}
@@ -427,8 +565,8 @@ export default function EditContactScreen() {
                       }
                     />
                     <TextInput
-                      style={[styles.input, { color: theme.text }]}
-                      placeholder="Email Address"
+                      style={[styles.valueInput, { color: theme.text }]}
+                      placeholder="Email"
                       placeholderTextColor={theme.secondaryText}
                       keyboardType="email-address"
                       autoCapitalize="none"
@@ -443,36 +581,103 @@ export default function EditContactScreen() {
                       onPress={() => removeEmail(emailItem.id)}
                       style={styles.removeButton}
                     >
-                      <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                      <Ionicons name="remove-circle" size={24} color="#FF3B30" />
                     </TouchableOpacity>
                   )}
                 </View>
               </View>
             ))}
             <TouchableOpacity style={styles.addButton} onPress={addEmail}>
-              <Ionicons name="add-circle-outline" size={22} color={theme.accent} />
+              <Ionicons name="add-circle" size={24} color={theme.accent} />
               <Text style={[styles.addButtonText, { color: theme.accent }]}>
                 Add Email
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* Additional Info Section */}
+          {/* Address Section */}
+          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <Text style={[styles.sectionTitle, { color: theme.secondaryText }]}>
+              ADDRESS
+            </Text>
+            {contactData.addresses.map((addressItem, index) => (
+              <View key={addressItem.id}>
+                {index > 0 && <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />}
+                <View style={styles.inputGroup}>
+                  <Ionicons name="location-outline" size={22} color={theme.secondaryText} />
+                  <View style={styles.multiInputContainer}>
+                    <TextInput
+                      style={[styles.labelInput, { color: theme.secondaryText }]}
+                      placeholder="Label"
+                      placeholderTextColor={theme.secondaryText}
+                      value={addressItem.label}
+                      onChangeText={(text) =>
+                        updateAddress(addressItem.id, "label", text)
+                      }
+                    />
+                    <TextInput
+                      style={[styles.valueInput, { color: theme.text }]}
+                      placeholder="Street"
+                      placeholderTextColor={theme.secondaryText}
+                      value={addressItem.street}
+                      onChangeText={(text) =>
+                        updateAddress(addressItem.id, "street", text)
+                      }
+                    />
+                    <View style={styles.addressRow}>
+                      <TextInput
+                        style={[styles.addressSmallInput, { color: theme.text }]}
+                        placeholder="City"
+                        placeholderTextColor={theme.secondaryText}
+                        value={addressItem.city}
+                        onChangeText={(text) =>
+                          updateAddress(addressItem.id, "city", text)
+                        }
+                      />
+                      <TextInput
+                        style={[styles.addressTinyInput, { color: theme.text }]}
+                        placeholder="State"
+                        placeholderTextColor={theme.secondaryText}
+                        value={addressItem.state}
+                        onChangeText={(text) =>
+                          updateAddress(addressItem.id, "state", text)
+                        }
+                      />
+                      <TextInput
+                        style={[styles.addressTinyInput, { color: theme.text }]}
+                        placeholder="ZIP"
+                        placeholderTextColor={theme.secondaryText}
+                        keyboardType="number-pad"
+                        value={addressItem.postalCode}
+                        onChangeText={(text) =>
+                          updateAddress(addressItem.id, "postalCode", text)
+                        }
+                      />
+                    </View>
+                  </View>
+                  {contactData.addresses.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => removeAddress(addressItem.id)}
+                      style={styles.removeButton}
+                    >
+                      <Ionicons name="remove-circle" size={24} color="#FF3B30" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.addButton} onPress={addAddress}>
+              <Ionicons name="add-circle" size={24} color={theme.accent} />
+              <Text style={[styles.addButtonText, { color: theme.accent }]}>
+                Add Address
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Birthday & Notes Section */}
           <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
             <View style={styles.inputGroup}>
-              <Ionicons name="location-outline" size={20} color={theme.secondaryText} />
-              <TextInput
-                style={[styles.input, { color: theme.text }]}
-                placeholder="Address"
-                placeholderTextColor={theme.secondaryText}
-                value={contactData.address}
-                onChangeText={(text) =>
-                  setContactData({ ...contactData, address: text })
-                }
-              />
-            </View>
-            <View style={[styles.inputGroup, { borderTopColor: theme.itemBorder, borderTopWidth: 1 }]}>
-              <Ionicons name="calendar-outline" size={20} color={theme.secondaryText} />
+              <Ionicons name="calendar-outline" size={22} color={theme.secondaryText} />
               <TextInput
                 style={[styles.input, { color: theme.text }]}
                 placeholder="Birthday (MM/DD/YYYY)"
@@ -483,14 +688,11 @@ export default function EditContactScreen() {
                 }
               />
             </View>
-          </View>
-
-          {/* Notes Section */}
-          <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
+            <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />
             <View style={styles.inputGroup}>
               <Ionicons
                 name="document-text-outline"
-                size={20}
+                size={22}
                 color={theme.secondaryText}
               />
               <TextInput
@@ -508,17 +710,33 @@ export default function EditContactScreen() {
             </View>
           </View>
 
-          {/* Save Button (Bottom) */}
+          {/* Save Button */}
           <TouchableOpacity
             style={[styles.saveButton, { backgroundColor: theme.accent }]}
             onPress={saveContact}
+            disabled={saving}
           >
-            <Text style={styles.saveButtonText}>
-              {contactId ? "Update Contact" : "Save Contact"}
-            </Text>
+            {saving ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-circle" size={22} color="#fff" />
+                <Text style={styles.saveButtonText}>Save Changes</Text>
+              </>
+            )}
           </TouchableOpacity>
 
-          {/* Bottom Spacing */}
+          {/* Delete Button */}
+          {contactId && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={deleteContact}
+            >
+              <Ionicons name="trash-outline" size={20} color="#fff" />
+              <Text style={styles.deleteButtonText}>Delete Contact</Text>
+            </TouchableOpacity>
+          )}
+
           <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -538,80 +756,85 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+  },
   avatarSection: {
     alignItems: "center",
-    paddingVertical: 20,
+    paddingVertical: 24,
   },
   avatarTouchable: {
     position: "relative",
-    marginBottom: 10,
+    marginBottom: 12,
   },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     justifyContent: "center",
     alignItems: "center",
   },
   avatarImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
   },
   avatarText: {
     color: "#fff",
-    fontSize: 40,
+    fontSize: 48,
     fontWeight: "bold",
   },
   cameraIconContainer: {
     position: "absolute",
     bottom: 0,
     right: 0,
-    backgroundColor: "#007AFF",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: "#fff",
   },
   changePhotoButton: {
     paddingVertical: 8,
   },
   changePhotoText: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "500",
   },
   section: {
-    marginHorizontal: width > 600 ? 40 : 20,
+    marginHorizontal: 16,
     marginBottom: 20,
     borderRadius: 12,
     overflow: "hidden",
   },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "600",
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-    textTransform: "uppercase",
+    paddingTop: 8,
+    paddingBottom: 4,
   },
   inputGroup: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   input: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 17,
     marginLeft: 12,
-    paddingVertical: 8,
+    paddingVertical: 4,
   },
   labelInput: {
     fontSize: 14,
-    marginBottom: 6,
+    marginBottom: 4,
+  },
+  valueInput: {
+    fontSize: 17,
   },
   multiInputContainer: {
     flex: 1,
@@ -620,30 +843,67 @@ const styles = StyleSheet.create({
   notesInput: {
     minHeight: 80,
   },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 50,
+  },
   removeButton: {
     padding: 4,
+    marginLeft: 8,
   },
   addButton: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
   },
   addButtonText: {
-    fontSize: 16,
+    fontSize: 17,
     marginLeft: 8,
     fontWeight: "500",
   },
+  addressRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 4,
+  },
+  addressSmallInput: {
+    flex: 2,
+    fontSize: 17,
+  },
+  addressTinyInput: {
+    flex: 1,
+    fontSize: 17,
+  },
   saveButton: {
-    marginHorizontal: width > 600 ? 40 : 20,
+    marginHorizontal: 16,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: "center",
     marginTop: 10,
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
   },
   saveButtonText: {
     color: "#fff",
     fontSize: 18,
+    fontWeight: "600",
+  },
+  deleteButton: {
+    marginHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    backgroundColor: "#FF3B30",
+    marginTop: 10,
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
+  },
+  deleteButtonText: {
+    color: "#fff",
+    fontSize: 17,
     fontWeight: "600",
   },
 });

@@ -161,10 +161,7 @@ export default function CallScreen() {
 
   // Edit contact
   const editContact = () => {
-    router.push({
-      pathname: '/editcontact',
-      params: { name, phone, imageUri: imageUri || '', contactId: contactId || '' }
-    });
+    router.push(`/editcontact?id=${contactId}`);
   };
 
   // Delete contact
