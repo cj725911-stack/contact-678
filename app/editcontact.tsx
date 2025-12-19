@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Dimensions,
   ActivityIndicator,
 } from "react-native";
 import * as Contacts from "expo-contacts";
@@ -20,8 +19,6 @@ import { Stack, router, useLocalSearchParams } from "expo-router";
 import * as ImageManipulator from "expo-image-manipulator";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../_ThemeContext";
-
-const { width } = Dimensions.get("window");
 
 export default function EditContactScreen() {
   const { theme } = useTheme();
@@ -42,7 +39,7 @@ export default function EditContactScreen() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [originalContact, setOriginalContact] = useState<any>(null);
+  const [originalContact, setOriginalContact] = useState(null);
 
   useEffect(() => {
     if (contactId) {
@@ -64,14 +61,17 @@ export default function EditContactScreen() {
       const contact = await Contacts.getContactByIdAsync(contactId);
       
       if (contact) {
-        console.log("Loaded contact:", contact);
+        console.log("Loaded contact:", JSON.stringify(contact, null, 2));
         setOriginalContact(contact);
 
-        // Parse birthday if available
+        // Parse birthday
         let birthdayString = "";
         if (contact.birthday) {
           const { month, day, year } = contact.birthday;
-          birthdayString = `${month?.toString().padStart(2, '0')}/${day?.toString().padStart(2, '0')}/${year || new Date().getFullYear()}`;
+          const m = month?.toString().padStart(2, '0') || '01';
+          const d = day?.toString().padStart(2, '0') || '01';
+          const y = year || new Date().getFullYear();
+          birthdayString = `${m}/${d}/${y}`;
         }
 
         // Parse addresses
@@ -86,6 +86,8 @@ export default function EditContactScreen() {
             postalCode: addr.postalCode || "",
           }));
         }
+
+        const imageUri = contact.image?.uri || "";
 
         setContactData({
           firstName: contact.firstName || "",
@@ -110,7 +112,7 @@ export default function EditContactScreen() {
           addresses: addressesArray,
           birthday: birthdayString,
           notes: contact.note || "",
-          imageUri: contact.image?.uri || "",
+          imageUri: imageUri,
         });
       } else {
         Alert.alert("Error", "Contact not found");
@@ -138,11 +140,10 @@ export default function EditContactScreen() {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.6,
+        quality: 0.7,
       });
 
       if (!result.canceled && result.assets[0]) {
-        // Resize image
         const resizedImage = await ImageManipulator.manipulateAsync(
           result.assets[0].uri,
           [{ resize: { width: 400, height: 400 } }],
@@ -156,8 +157,26 @@ export default function EditContactScreen() {
     }
   };
 
+  const removeImage = () => {
+    Alert.alert(
+      "Remove Photo",
+      "Are you sure you want to remove this photo?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            setContactData({ ...contactData, imageUri: "" });
+          },
+        },
+      ]
+    );
+  };
+
   const saveContact = async () => {
-    if (!contactData.firstName && !contactData.lastName) {
+    // Validation
+    if (!contactData.firstName.trim() && !contactData.lastName.trim()) {
       Alert.alert("Error", "Please enter at least a first or last name");
       return;
     }
@@ -178,69 +197,128 @@ export default function EditContactScreen() {
         return;
       }
 
-      // Parse birthday
-      let birthdayObj = undefined;
-      if (contactData.birthday) {
+      // Start with minimal required fields
+      const contact: any = {
+        id: contactId,
+        firstName: contactData.firstName.trim() || undefined,
+        lastName: contactData.lastName.trim() || undefined,
+      };
+
+      // Company
+      if (contactData.company?.trim()) {
+        contact.company = contactData.company.trim();
+      }
+
+      // Phone numbers - CRITICAL: Filter out empty ones
+      const validPhones = contactData.phoneNumbers
+        .filter((p) => p.number?.trim())
+        .map((p) => ({
+          label: p.label?.trim() || "mobile",
+          number: p.number.trim(),
+        }));
+      
+      if (validPhones.length > 0) {
+        contact.phoneNumbers = validPhones;
+      }
+
+      // Emails - Filter out empty ones
+      const validEmails = contactData.emails
+        .filter((e) => e.email?.trim())
+        .map((e) => ({
+          label: e.label?.trim() || "home",
+          email: e.email.trim(),
+        }));
+      
+      if (validEmails.length > 0) {
+        contact.emails = validEmails;
+      }
+
+      // Addresses - Filter out completely empty ones
+      const validAddresses = contactData.addresses
+        .filter((a) => 
+          a.street?.trim() || a.city?.trim() || a.state?.trim() || a.postalCode?.trim()
+        )
+        .map((a) => ({
+          label: a.label?.trim() || "home",
+          street: a.street?.trim() || "",
+          city: a.city?.trim() || "",
+          region: a.state?.trim() || "",
+          postalCode: a.postalCode?.trim() || "",
+          country: "",
+        }));
+      
+      if (validAddresses.length > 0) {
+        contact.addresses = validAddresses;
+      }
+
+      // Birthday
+      if (contactData.birthday?.trim()) {
         const parts = contactData.birthday.split("/");
         if (parts.length === 3) {
-          birthdayObj = {
-            month: parseInt(parts[0]),
-            day: parseInt(parts[1]),
-            year: parseInt(parts[2]),
-          };
+          const month = parseInt(parts[0]);
+          const day = parseInt(parts[1]);
+          const year = parseInt(parts[2]);
+          
+          if (!isNaN(month) && !isNaN(day) && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+            contact.birthday = { 
+              month, 
+              day, 
+              year: (!isNaN(year) && year > 1900) ? year : undefined 
+            };
+          }
         }
       }
 
-      const contact: any = {
-        [Contacts.Fields.FirstName]: contactData.firstName,
-        [Contacts.Fields.LastName]: contactData.lastName,
-        [Contacts.Fields.Company]: contactData.company,
-        [Contacts.Fields.PhoneNumbers]: contactData.phoneNumbers
-          .filter((p) => p.number.trim() !== "")
-          .map((p) => ({
-            label: p.label,
-            number: p.number,
-          })),
-        [Contacts.Fields.Emails]: contactData.emails
-          .filter((e) => e.email.trim() !== "")
-          .map((e) => ({
-            label: e.label,
-            email: e.email,
-          })),
-        [Contacts.Fields.Addresses]: contactData.addresses
-          .filter((a) => a.street.trim() !== "" || a.city.trim() !== "")
-          .map((a) => ({
-            label: a.label,
-            street: a.street,
-            city: a.city,
-            region: a.state,
-            postalCode: a.postalCode,
-          })),
-        [Contacts.Fields.Note]: contactData.notes,
-      };
-
-      if (birthdayObj) {
-        contact[Contacts.Fields.Birthday] = birthdayObj;
+      // Notes
+      if (contactData.notes?.trim()) {
+        contact.note = contactData.notes.trim();
       }
 
-      // Add image if available
-      if (contactData.imageUri) {
-        contact[Contacts.Fields.Image] = { uri: contactData.imageUri };
+      // Image handling - try multiple approaches
+      const originalImageUri = originalContact?.image?.uri || "";
+      if (contactData.imageUri !== originalImageUri) {
+        if (contactData.imageUri) {
+          // Try setting image
+          contact.image = { uri: contactData.imageUri };
+        }
       }
 
-      if (contactId) {
-        // Update existing contact
-        await Contacts.updateContactAsync({
-          id: contactId,
-          ...contact,
-        });
-        Alert.alert("Success", "Contact updated successfully", [
-          { text: "OK", onPress: () => router.back() }
-        ]);
-      }
+      console.log("=== SAVING CONTACT ===");
+      console.log("Contact ID:", contactId);
+      console.log("Contact Object:", JSON.stringify(contact, null, 2));
+      console.log("Platform:", Platform.OS);
+      
+      // Attempt to save
+      const result = await Contacts.updateContactAsync(contact);
+      console.log("Update result:", result);
+      
+      // Verify the save worked by reloading
+      const updatedContact = await Contacts.getContactByIdAsync(contactId);
+      console.log("Reloaded contact:", JSON.stringify(updatedContact, null, 2));
+      
+      Alert.alert("Success", "Contact updated successfully", [
+        { text: "OK", onPress: () => router.back() }
+      ]);
     } catch (error) {
-      console.error("Error saving contact:", error);
-      Alert.alert("Error", "Failed to save contact. Please try again.");
+      console.error("=== ERROR SAVING CONTACT ===");
+      console.error("Error object:", error);
+      console.error("Error message:", error?.message);
+      console.error("Error stack:", error?.stack);
+      
+      let errorMessage = "Failed to save contact. ";
+      
+      if (error?.message?.includes("OperationApplicationException")) {
+        errorMessage += "Android encountered an issue. Try these solutions:\n\n1. Remove the photo\n2. Simplify addresses\n3. Check phone number format";
+      } else if (error?.message) {
+        errorMessage += error.message;
+      } else {
+        errorMessage += "Unknown error. Check console logs.";
+      }
+      
+      Alert.alert("Error", errorMessage, [
+        { text: "View Console", onPress: () => console.log("Check logs above") },
+        { text: "OK" }
+      ]);
     } finally {
       setSaving(false);
     }
@@ -265,7 +343,7 @@ export default function EditContactScreen() {
 
               await Contacts.removeContactAsync(contactId);
               Alert.alert("Success", "Contact deleted successfully", [
-                { text: "OK", onPress: () => router.back() }
+                { text: "OK", onPress: () => router.replace("/") }
               ]);
             } catch (error) {
               console.error("Error deleting contact:", error);
@@ -319,10 +397,6 @@ export default function EditContactScreen() {
   };
 
   const removeEmail = (id: string) => {
-    if (contactData.emails.length === 1) {
-      Alert.alert("Error", "At least one email field is required");
-      return;
-    }
     setContactData({
       ...contactData,
       emails: contactData.emails.filter((e) => e.id !== id),
@@ -390,7 +464,7 @@ export default function EditContactScreen() {
   const getInitials = () => {
     const first = contactData.firstName.charAt(0).toUpperCase();
     const last = contactData.lastName.charAt(0).toUpperCase();
-    return first || last || "?";
+    return first + last || first || last || "?";
   };
 
   return (
@@ -410,8 +484,8 @@ export default function EditContactScreen() {
               {saving ? (
                 <ActivityIndicator size="small" color={theme.accent} />
               ) : (
-                <Text style={{ color: theme.accent, fontSize: 16, fontWeight: "600" }}>
-                  Done
+                <Text style={{ color: theme.accent, fontSize: 17, fontWeight: "600" }}>
+                  Save
                 </Text>
               )}
             </TouchableOpacity>
@@ -422,11 +496,13 @@ export default function EditContactScreen() {
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
       >
         <ScrollView
           style={[styles.container, { backgroundColor: theme.background }]}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
           {/* Avatar Section */}
           <View style={styles.avatarSection}>
@@ -445,11 +521,23 @@ export default function EditContactScreen() {
                 <Ionicons name="camera" size={18} color="#fff" />
               </View>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.changePhotoButton} onPress={pickImage}>
-              <Text style={[styles.changePhotoText, { color: theme.accent }]}>
-                {contactData.imageUri ? "Change Photo" : "Add Photo"}
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.photoButtons}>
+              <TouchableOpacity style={styles.photoButton} onPress={pickImage}>
+                <Text style={[styles.photoButtonText, { color: theme.accent }]}>
+                  {contactData.imageUri ? "Change Photo" : "Add Photo"}
+                </Text>
+              </TouchableOpacity>
+              {contactData.imageUri && (
+                <>
+                  <Text style={[styles.photoDivider, { color: theme.secondaryText }]}>•</Text>
+                  <TouchableOpacity style={styles.photoButton} onPress={removeImage}>
+                    <Text style={[styles.photoButtonText, { color: "#FF3B30" }]}>
+                      Remove
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
           </View>
 
           {/* Name Section */}
@@ -497,7 +585,7 @@ export default function EditContactScreen() {
           {/* Phone Numbers Section */}
           <View style={[styles.section, { backgroundColor: theme.inputBg }]}>
             <Text style={[styles.sectionTitle, { color: theme.secondaryText }]}>
-              PHONE NUMBERS
+              PHONE
             </Text>
             {contactData.phoneNumbers.map((phoneItem, index) => (
               <View key={phoneItem.id}>
@@ -655,14 +743,12 @@ export default function EditContactScreen() {
                       />
                     </View>
                   </View>
-                  {contactData.addresses.length > 0 && (
-                    <TouchableOpacity
-                      onPress={() => removeAddress(addressItem.id)}
-                      style={styles.removeButton}
-                    >
-                      <Ionicons name="remove-circle" size={24} color="#FF3B30" />
-                    </TouchableOpacity>
-                  )}
+                  <TouchableOpacity
+                    onPress={() => removeAddress(addressItem.id)}
+                    style={styles.removeButton}
+                  >
+                    <Ionicons name="remove-circle" size={24} color="#FF3B30" />
+                  </TouchableOpacity>
                 </View>
               </View>
             ))}
@@ -686,6 +772,7 @@ export default function EditContactScreen() {
                 onChangeText={(text) =>
                   setContactData({ ...contactData, birthday: text })
                 }
+                keyboardType="numbers-and-punctuation"
               />
             </View>
             <View style={[styles.divider, { backgroundColor: theme.itemBorder }]} />
@@ -710,29 +797,13 @@ export default function EditContactScreen() {
             </View>
           </View>
 
-          {/* Save Button */}
-          <TouchableOpacity
-            style={[styles.saveButton, { backgroundColor: theme.accent }]}
-            onPress={saveContact}
-            disabled={saving}
-          >
-            {saving ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle" size={22} color="#fff" />
-                <Text style={styles.saveButtonText}>Save Changes</Text>
-              </>
-            )}
-          </TouchableOpacity>
-
           {/* Delete Button */}
           {contactId && (
             <TouchableOpacity
               style={styles.deleteButton}
               onPress={deleteContact}
             >
-              <Ionicons name="trash-outline" size={20} color="#fff" />
+              <Ionicons name="trash-outline" size={20} color="#FF3B30" />
               <Text style={styles.deleteButtonText}>Delete Contact</Text>
             </TouchableOpacity>
           )}
@@ -797,12 +868,21 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "#fff",
   },
-  changePhotoButton: {
-    paddingVertical: 8,
+  photoButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
-  changePhotoText: {
+  photoButton: {
+    paddingVertical: 4,
+  },
+  photoButtonText: {
     fontSize: 17,
     fontWeight: "500",
+  },
+  photoDivider: {
+    fontSize: 16,
+    marginHorizontal: 4,
   },
   section: {
     marginHorizontal: 16,
@@ -814,8 +894,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 4,
+    paddingTop: 12,
+    paddingBottom: 8,
+    letterSpacing: 0.5,
   },
   inputGroup: {
     flexDirection: "row",
@@ -831,7 +912,8 @@ const styles = StyleSheet.create({
   },
   labelInput: {
     fontSize: 14,
-    marginBottom: 4,
+    marginBottom: 6,
+    fontWeight: "500",
   },
   valueInput: {
     fontSize: 17,
@@ -842,6 +924,7 @@ const styles = StyleSheet.create({
   },
   notesInput: {
     minHeight: 80,
+    paddingTop: 4,
   },
   divider: {
     height: StyleSheet.hairlineWidth,
@@ -855,7 +938,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 12,
   },
   addButtonText: {
     fontSize: 17,
@@ -865,7 +948,7 @@ const styles = StyleSheet.create({
   addressRow: {
     flexDirection: "row",
     gap: 8,
-    marginTop: 4,
+    marginTop: 6,
   },
   addressSmallInput: {
     flex: 2,
@@ -875,34 +958,19 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 17,
   },
-  saveButton: {
-    marginHorizontal: 16,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-    marginTop: 10,
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 8,
-  },
-  saveButtonText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-  },
   deleteButton: {
     marginHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
-    backgroundColor: "#FF3B30",
+    backgroundColor: "transparent",
     marginTop: 10,
     flexDirection: "row",
     justifyContent: "center",
     gap: 8,
   },
   deleteButtonText: {
-    color: "#fff",
+    color: "#FF3B30",
     fontSize: 17,
     fontWeight: "600",
   },
