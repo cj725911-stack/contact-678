@@ -197,19 +197,19 @@ export default function EditContactScreen() {
         return;
       }
 
-      // Start with minimal required fields
+      // Build contact object - using direct properties
       const contact: any = {
         id: contactId,
-        firstName: contactData.firstName.trim() || undefined,
-        lastName: contactData.lastName.trim() || undefined,
+        firstName: contactData.firstName.trim(),
+        lastName: contactData.lastName.trim(),
       };
 
-      // Company
+      // Add company
       if (contactData.company?.trim()) {
         contact.company = contactData.company.trim();
       }
 
-      // Phone numbers - CRITICAL: Filter out empty ones
+      // Phone numbers - filter and format
       const validPhones = contactData.phoneNumbers
         .filter((p) => p.number?.trim())
         .map((p) => ({
@@ -221,7 +221,7 @@ export default function EditContactScreen() {
         contact.phoneNumbers = validPhones;
       }
 
-      // Emails - Filter out empty ones
+      // Emails - filter and format
       const validEmails = contactData.emails
         .filter((e) => e.email?.trim())
         .map((e) => ({
@@ -233,7 +233,7 @@ export default function EditContactScreen() {
         contact.emails = validEmails;
       }
 
-      // Addresses - Filter out completely empty ones
+      // Addresses - filter and format
       const validAddresses = contactData.addresses
         .filter((a) => 
           a.street?.trim() || a.city?.trim() || a.state?.trim() || a.postalCode?.trim()
@@ -251,7 +251,7 @@ export default function EditContactScreen() {
         contact.addresses = validAddresses;
       }
 
-      // Birthday
+      // Birthday - parse and validate
       if (contactData.birthday?.trim()) {
         const parts = contactData.birthday.split("/");
         if (parts.length === 3) {
@@ -263,7 +263,7 @@ export default function EditContactScreen() {
             contact.birthday = { 
               month, 
               day, 
-              year: (!isNaN(year) && year > 1900) ? year : undefined 
+              year: (!isNaN(year) && year > 1900) ? year : undefined,
             };
           }
         }
@@ -274,51 +274,30 @@ export default function EditContactScreen() {
         contact.note = contactData.notes.trim();
       }
 
-      // Image handling - try multiple approaches
-      const originalImageUri = originalContact?.image?.uri || "";
-      if (contactData.imageUri !== originalImageUri) {
-        if (contactData.imageUri) {
-          // Try setting image
-          contact.image = { uri: contactData.imageUri };
-        }
+      // Image - only if changed
+      if (contactData.imageUri && contactData.imageUri !== originalContact?.image?.uri) {
+        contact.image = { uri: contactData.imageUri };
       }
 
       console.log("=== SAVING CONTACT ===");
       console.log("Contact ID:", contactId);
-      console.log("Contact Object:", JSON.stringify(contact, null, 2));
       console.log("Platform:", Platform.OS);
       
-      // Attempt to save
-      const result = await Contacts.updateContactAsync(contact);
-      console.log("Update result:", result);
-      
-      // Verify the save worked by reloading
-      const updatedContact = await Contacts.getContactByIdAsync(contactId);
-      console.log("Reloaded contact:", JSON.stringify(updatedContact, null, 2));
+      // Save the contact
+      await Contacts.updateContactAsync(contact);
       
       Alert.alert("Success", "Contact updated successfully", [
         { text: "OK", onPress: () => router.back() }
       ]);
     } catch (error) {
       console.error("=== ERROR SAVING CONTACT ===");
-      console.error("Error object:", error);
-      console.error("Error message:", error?.message);
-      console.error("Error stack:", error?.stack);
+      console.error("Error:", error);
       
-      let errorMessage = "Failed to save contact. ";
-      
-      if (error?.message?.includes("OperationApplicationException")) {
-        errorMessage += "Android encountered an issue. Try these solutions:\n\n1. Remove the photo\n2. Simplify addresses\n3. Check phone number format";
-      } else if (error?.message) {
-        errorMessage += error.message;
-      } else {
-        errorMessage += "Unknown error. Check console logs.";
-      }
-      
-      Alert.alert("Error", errorMessage, [
-        { text: "View Console", onPress: () => console.log("Check logs above") },
-        { text: "OK" }
-      ]);
+      Alert.alert(
+        "Error", 
+        `Failed to save contact: ${error?.message || "Unknown error"}`,
+        [{ text: "OK" }]
+      );
     } finally {
       setSaving(false);
     }
@@ -471,20 +450,28 @@ export default function EditContactScreen() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
       <Stack.Screen
         options={{
-          title: "Edit Contact",
+          title: contactId ? "Edit Contact" : "Add Contact",
+          headerShown: true,
           headerTitleStyle: { color: theme.text },
           headerStyle: { backgroundColor: theme.background },
           headerTintColor: theme.accent,
           headerRight: () => (
             <TouchableOpacity 
               onPress={saveContact} 
-              style={{ marginRight: 10 }}
+              style={{ 
+                marginRight: 15,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                backgroundColor: theme.accent,
+                borderRadius: 8,
+              }}
               disabled={saving}
+              activeOpacity={0.7}
             >
               {saving ? (
-                <ActivityIndicator size="small" color={theme.accent} />
+                <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={{ color: theme.accent, fontSize: 17, fontWeight: "600" }}>
+                <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
                   Save
                 </Text>
               )}
@@ -808,6 +795,23 @@ export default function EditContactScreen() {
             </TouchableOpacity>
           )}
 
+          {/* Save Button - Fixed at bottom */}
+          <TouchableOpacity
+            style={[styles.saveButton, { backgroundColor: theme.accent }]}
+            onPress={saveContact}
+            disabled={saving}
+            activeOpacity={0.7}
+          >
+            {saving ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-circle" size={22} color="#fff" />
+                <Text style={styles.saveButtonText}>Save Contact</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
           <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -973,5 +977,25 @@ const styles = StyleSheet.create({
     color: "#FF3B30",
     fontSize: 17,
     fontWeight: "600",
+  },
+  saveButton: {
+    marginHorizontal: 16,
+    marginTop: 20,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  saveButtonText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
   },
 });
