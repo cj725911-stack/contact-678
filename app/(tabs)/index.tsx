@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -7,27 +7,24 @@ import {
   TouchableOpacity,
   TextInput,
   Modal,
-  Pressable,
   Image,
   ActivityIndicator,
-  RefreshControl,
   Dimensions,
 } from 'react-native';
-import * as Contacts from 'expo-contacts';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { useTheme } from '../../_ThemeContext';
+import { useContacts } from '../_ContactsContext';
 
 const { width } = Dimensions.get('window');
 
 const ContactsScreen = () => {
-  const [contacts, setContacts] = useState([]);
-  const [filteredContacts, setFilteredContacts] = useState([]);
+  const { contacts, loading, refreshContacts, deleteContact } = useContacts();
+  const [filteredContacts, setFilteredContacts] = useState(contacts);
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
-  const [contactToDelete, setContactToDelete] = useState(null);
+  const [contactToDelete, setContactToDelete] = useState<any>(null);
   const [menuVisible, setMenuVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
@@ -37,60 +34,19 @@ const ContactsScreen = () => {
 
   const { theme, isDark } = useTheme();
 
-  // Load contacts on mount
-  useEffect(() => {
-    loadContacts();
-  }, []);
-
-  // Reload contacts whenever screen comes into focus
-  useFocusEffect(
-    React.useCallback(() => {
-      loadContacts();
-    }, [])
-  );
-
-  const loadContacts = async (isRefreshing = false) => {
-    if (!isRefreshing) setLoading(true);
-    
-    try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      
-      if (status === 'granted') {
-        const { data } = await Contacts.getContactsAsync({
-          fields: [
-            Contacts.Fields.PhoneNumbers,
-            Contacts.Fields.Image,
-            Contacts.Fields.ImageAvailable,
-          ],
-        });
-        
-        if (data.length > 0) {
-          const sorted = data.sort((a, b) =>
-            (a.name || '').localeCompare(b.name || '')
-          );
-          setContacts(sorted);
-          setFilteredContacts(sorted);
-        } else {
-          setContacts([]);
-          setFilteredContacts([]);
-        }
-      } else {
-        setErrorMessage('Permission denied. Please grant contacts access in settings.');
-        setShowErrorAlert(true);
-      }
-    } catch (error) {
-      console.error('Error loading contacts:', error);
-      setErrorMessage('Failed to load contacts. Please try again.');
-      setShowErrorAlert(true);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  // Update filtered contacts when contacts change
+  React.useEffect(() => {
+    if (search.trim() === '') {
+      setFilteredContacts(contacts);
+    } else {
+      handleSearch(search);
     }
-  };
+  }, [contacts]);
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    loadContacts(true);
+    await refreshContacts();
+    setRefreshing(false);
   };
 
   const handleSearch = (text: string) => {
@@ -98,9 +54,9 @@ const ContactsScreen = () => {
     if (text.trim() === '') {
       setFilteredContacts(contacts);
     } else {
-      const filtered = contacts.filter((contact) =>
+      const filtered = contacts.filter((contact: any) =>
         contact.name?.toLowerCase().includes(text.toLowerCase()) ||
-        contact.phoneNumbers?.some(phone => 
+        contact.phoneNumbers?.some((phone: any) => 
           phone.number?.includes(text)
         )
       );
@@ -120,21 +76,11 @@ const ContactsScreen = () => {
     setDeleteModalVisible(false);
 
     try {
-      // Delete from device contacts permanently
-      await Contacts.removeContactAsync(contactToDelete.id);
+      await deleteContact(contactToDelete.id);
       
-      // Update local state immediately for responsive UI
-      const newContacts = contacts.filter((c) => c.id !== contactToDelete.id);
-      const newFiltered = filteredContacts.filter((c) => c.id !== contactToDelete.id);
-      
-      setContacts(newContacts);
-      setFilteredContacts(newFiltered);
-      
-      // Show success message
       setSuccessMessage(`${contactToDelete.name || 'Contact'} deleted successfully`);
       setShowSuccessAlert(true);
       
-      // Hide success message after 2 seconds
       setTimeout(() => {
         setShowSuccessAlert(false);
       }, 2000);
@@ -209,7 +155,6 @@ const ContactsScreen = () => {
     );
   };
 
-  // Success Alert Component
   const SuccessAlert = () => (
     <Modal
       transparent
@@ -231,7 +176,6 @@ const ContactsScreen = () => {
     </Modal>
   );
 
-  // Error Alert Component
   const ErrorAlert = () => (
     <Modal
       transparent
@@ -263,7 +207,6 @@ const ContactsScreen = () => {
     </Modal>
   );
 
-  // Deleting Overlay
   const DeletingOverlay = () => (
     <Modal transparent visible={deleting} animationType="fade">
       <View style={styles.alertOverlay}>
@@ -290,7 +233,6 @@ const ContactsScreen = () => {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      {/* Header */}
       <View
         style={[
           styles.header,
@@ -303,7 +245,6 @@ const ContactsScreen = () => {
         <Text style={[styles.headerTitle, { color: theme.text }]}>Contacts</Text>
 
         <View style={styles.headerActions}>
-          {/* Add Contact */}
           <TouchableOpacity 
             onPress={() => router.push('./addContact')}
             activeOpacity={0.7}
@@ -312,7 +253,6 @@ const ContactsScreen = () => {
             <Ionicons name="add-circle" size={30} color={theme.accent} />
           </TouchableOpacity>
 
-          {/* Three Dots Menu */}
           <TouchableOpacity 
             onPress={() => setMenuVisible(true)}
             activeOpacity={0.7}
@@ -323,7 +263,6 @@ const ContactsScreen = () => {
         </View>
       </View>
 
-      {/* Search Bar */}
       <View style={[styles.searchContainer, { backgroundColor: theme.inputBg }]}>
         <Ionicons
           name="search"
@@ -346,22 +285,18 @@ const ContactsScreen = () => {
         )}
       </View>
 
-      {/* Contact List */}
       {filteredContacts.length > 0 ? (
         <FlatList
           data={filteredContacts}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={theme.accent}
-              colors={[theme.accent]}
-            />
-          }
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={20}
+          updateCellsBatchingPeriod={50}
+          initialNumToRender={20}
+          windowSize={10}
         />
       ) : (
         <View style={styles.center}>
@@ -380,16 +315,6 @@ const ContactsScreen = () => {
         </View>
       )}
 
-      {/* Themed Tab Bar */}
-      <View style={[
-        styles.tabBar, 
-        { 
-          backgroundColor: isDark ? '#1c1c1e' : '#f2f2f7',
-          borderTopColor: theme.itemBorder 
-        }
-      ]} />
-
-      {/* Delete Confirmation Modal */}
       <Modal
         transparent
         visible={deleteModalVisible}
@@ -435,7 +360,6 @@ const ContactsScreen = () => {
         </TouchableOpacity>
       </Modal>
 
-      {/* 3-Dot Popup Menu */}
       <Modal
         transparent
         animationType="fade"
@@ -494,7 +418,6 @@ const ContactsScreen = () => {
         </TouchableOpacity>
       </Modal>
 
-      {/* Alerts */}
       <SuccessAlert />
       <ErrorAlert />
       <DeletingOverlay />
@@ -573,7 +496,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   listContent: {
-    paddingBottom: 100,
+    paddingBottom: 20,
   },
   item: {
     flexDirection: 'row',

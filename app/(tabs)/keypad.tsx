@@ -1,8 +1,8 @@
-import { View, Text, TouchableOpacity, StyleSheet, Vibration } from "react-native";
-import { useState } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, Vibration, PermissionsAndroid, Platform, Modal } from "react-native";
+import { useState, useEffect } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../_ThemeContext";
-import { Linking } from "react-native";
+import RNImmediatePhoneCall from 'react-native-immediate-phone-call';
 
 const dialPad = [
   [
@@ -30,22 +30,121 @@ const dialPad = [
 export default function Keypad() {
   const { theme } = useTheme();
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [showErrorAlert, setShowErrorAlert] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    requestPhonePermission();
+  }, []);
+
+  const requestPhonePermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+          {
+            title: 'Phone Call Permission',
+            message: 'This app needs access to make phone calls.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          },
+        );
+        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+          console.log('Phone call permission granted');
+        } else {
+          console.log('Phone call permission denied');
+        }
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+  };
 
   const handlePress = (value: string) => {
     Vibration.vibrate(50);
     setPhoneNumber((prev) => prev + value);
   };
 
+  const handleLongPress = (value: string) => {
+    if (value === "0") {
+      Vibration.vibrate(50);
+      setPhoneNumber((prev) => prev + "+");
+    }
+  };
+
   const handleDelete = () => {
-    Vibration.vibrate(50);
-    setPhoneNumber((prev) => prev.slice(0, -1));
+    if (phoneNumber) {
+      Vibration.vibrate(50);
+      setPhoneNumber((prev) => prev.slice(0, -1));
+    }
+  };
+
+  const handleLongDelete = () => {
+    if (phoneNumber) {
+      Vibration.vibrate(100);
+      setPhoneNumber("");
+    }
   };
 
   const handleCall = () => {
-    if (phoneNumber) {
-      Linking.openURL(`tel:${phoneNumber}`);
+    if (!phoneNumber) {
+      setErrorMessage("Please enter a phone number");
+      setShowErrorAlert(true);
+      return;
+    }
+
+    try {
+      const cleanNumber = phoneNumber.replace(/[^0-9+]/g, "");
+      
+      if (Platform.OS === 'android') {
+        RNImmediatePhoneCall.immediatePhoneCall(cleanNumber);
+        console.log(`Calling ${cleanNumber}...`);
+        // Clear the number after initiating call
+        setPhoneNumber("");
+      } else {
+        // For iOS, show a message that immediate calling isn't supported
+        setErrorMessage("Immediate calling is only available on Android");
+        setShowErrorAlert(true);
+      }
+    } catch (error) {
+      console.error('Call error:', error);
+      setErrorMessage("Unable to make call. Please check permissions.");
+      setShowErrorAlert(true);
     }
   };
+
+  // Error Alert Component
+  const ErrorAlert = () => (
+    <Modal
+      transparent
+      visible={showErrorAlert}
+      animationType="fade"
+      onRequestClose={() => setShowErrorAlert(false)}
+    >
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={() => setShowErrorAlert(false)}
+        style={styles.modalOverlay}
+      >
+        <View style={[styles.alertBox, { backgroundColor: theme.inputBg }]}>
+          <View style={[styles.alertIcon, { backgroundColor: "#FF3B30" }]}>
+            <Ionicons name="alert-circle" size={24} color="#fff" />
+          </View>
+          <Text style={[styles.alertTitle, { color: theme.text }]}>Error</Text>
+          <Text style={[styles.alertMessage, { color: theme.secondaryText }]}>
+            {errorMessage}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowErrorAlert(false)}
+            style={[styles.alertButton, { backgroundColor: theme.accent }]}
+          >
+            <Text style={styles.alertButtonText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -63,6 +162,8 @@ export default function Keypad() {
                 key={item.number}
                 style={styles.button}
                 onPress={() => handlePress(item.number)}
+                onLongPress={() => handleLongPress(item.number)}
+                delayLongPress={500}
               >
                 <Text style={[styles.number, { color: theme.text }]}>
                   {item.number}
@@ -82,7 +183,13 @@ export default function Keypad() {
         <View style={styles.actionButton} />
         
         <TouchableOpacity
-          style={[styles.callButton, { backgroundColor: theme.accent }]}
+          style={[
+            styles.callButton, 
+            { 
+              backgroundColor: phoneNumber ? theme.accent : theme.secondaryText,
+              opacity: phoneNumber ? 1 : 0.5 
+            }
+          ]}
           onPress={handleCall}
           disabled={!phoneNumber}
         >
@@ -92,6 +199,8 @@ export default function Keypad() {
         <TouchableOpacity
           style={styles.actionButton}
           onPress={handleDelete}
+          onLongPress={handleLongDelete}
+          delayLongPress={500}
           disabled={!phoneNumber}
         >
           <Ionicons
@@ -101,6 +210,8 @@ export default function Keypad() {
           />
         </TouchableOpacity>
       </View>
+
+      <ErrorAlert />
     </View>
   );
 }
@@ -160,5 +271,53 @@ const styles = StyleSheet.create({
     height: 65,
     justifyContent: "center",
     alignItems: "center",
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  alertBox: {
+    width: 280,
+    borderRadius: 16,
+    padding: 24,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  alertIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  alertTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 8,
+  },
+  alertMessage: {
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  alertButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+    minWidth: 100,
+    alignItems: "center",
+  },
+  alertButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });
