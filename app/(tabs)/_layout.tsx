@@ -19,6 +19,24 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen
+        name="keypad"
+        options={{
+          title: "Keypad",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="keypad" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="recents"
+        options={{
+          title: "Recents",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="time-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="index"
         options={{
           title: "Contacts",
